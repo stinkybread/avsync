@@ -1,13 +1,11 @@
 """
-Optimized Audio and Video Utilities Module
+Enhanced Audio and Video Utilities Module
 
-This module provides essential utilities for working with audio and video files:
-- Audio track extraction and information
-- Video frame extraction with scene detection
-- Duration calculations
+This module provides improved utilities for working with audio and video files:
+- Enhanced audio extraction and loading
+- Advanced video frame extraction with better preprocessing
+- Improved duration calculations
 - Muxing operations
-
-Optimized to focus on the functionality needed for visual synchronization with multiple audio tracks.
 """
 
 import os
@@ -21,12 +19,12 @@ import cv2
 
 
 class EnhancedAudioVideoUtils:
-    """Essential utilities for audio and video processing"""
+    """Enhanced utilities for audio and video processing"""
     
     @staticmethod
     def get_audio_tracks(video_path):
         """
-        Get a list of audio tracks available in the video file
+        Get a list of audio tracks available in the video file with improved error handling
         
         Parameters:
         video_path (str): Path to the video file
@@ -68,7 +66,7 @@ class EnhancedAudioVideoUtils:
     @staticmethod
     def select_audio_track(video_path, force_track=None):
         """
-        Select an audio track from a video file
+        Select an audio track from a video file with improved error handling
         
         Parameters:
         video_path (str): Path to the video file
@@ -124,7 +122,7 @@ class EnhancedAudioVideoUtils:
     @staticmethod
     def extract_audio(video_path, output_path=None, track_index=None, sample_rate=44100, channels=1):
         """
-        Extract audio from video file using FFmpeg
+        Extract audio from video file using FFmpeg with improved parameters
         
         Parameters:
         video_path (str): Path to the video file
@@ -155,8 +153,11 @@ class EnhancedAudioVideoUtils:
                 ffmpeg_command.extend(['-map', f'0:{stream_index}'])
                 print(f"Mapping audio stream index {stream_index} (track {track_index})")
         
-        # Add output file and overwrite flag
-        ffmpeg_command.extend([output_path, '-y'])
+        # Add advanced audio filtering options for better quality
+        ffmpeg_command.extend([
+            '-af', 'aresample=resampler=soxr:precision=28:cutoff=0.99',  # High quality resampling
+            output_path, '-y'  # Output file and overwrite flag
+        ])
         
         try:
             # Run FFmpeg with detailed error handling
@@ -171,7 +172,7 @@ class EnhancedAudioVideoUtils:
     @staticmethod
     def load_audio(audio_path, sample_rate=44100, normalize=True):
         """
-        Load audio file and return the audio data
+        Load audio file and return the audio data with enhanced options
         
         Parameters:
         audio_path (str): Path to the audio file
@@ -220,26 +221,9 @@ class EnhancedAudioVideoUtils:
                 raise RuntimeError(f"Could not load audio file {audio_path}: {e2}")
     
     @staticmethod
-    def extract_frames(video_path, output_dir=None, max_frames=500, fps=1.0, 
-                      target_width=640, use_scene_detect=True, scene_threshold=0.25, 
+    def extract_frames(video_path, output_dir=None, max_frames=100, fps=1.0, 
+                      target_width=640, use_scene_detect=True, scene_threshold=0.6, 
                       reference_aspect_ratio=None, preserve_aspect_ratio=False):
-        """
-        Extract frames from a video optimized for scene detection
-        
-        Parameters:
-        video_path (str): Path to the video file
-        output_dir (str): Directory to save extracted frames
-        max_frames (int): Maximum number of frames to extract
-        fps (float): Frames per second for uniform extraction
-        target_width (int): Width to resize frames to
-        use_scene_detect (bool): Whether to use scene detection for frame selection
-        scene_threshold (float): Threshold for scene detection
-        reference_aspect_ratio (float): Aspect ratio to match
-        preserve_aspect_ratio (bool): Whether to preserve aspect ratio
-        
-        Returns:
-        tuple: (frames dictionary, timestamps list)
-        """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f"Could not open video: {video_path}")
@@ -376,7 +360,7 @@ class EnhancedAudioVideoUtils:
     @staticmethod
     def save_audio(audio_data, output_path, sr, bit_depth=16):
         """
-        Save audio data to a file
+        Save audio data to a file with improved quality options
         
         Parameters:
         audio_data (numpy.ndarray): Audio data
@@ -419,7 +403,7 @@ class EnhancedAudioVideoUtils:
                              audio_language="Unknown", audio_title=None,
                              preserve_original_audio=True, video_codec="copy"):
         """
-        Mux audio file with the reference video
+        Mux audio file with the reference video with enhanced options
         
         Parameters:
         reference_video_path (str): Path to the reference video
@@ -438,7 +422,7 @@ class EnhancedAudioVideoUtils:
             if audio_title is None:
                 audio_title = audio_language
             
-            # Build the ffmpeg command
+            # Build the ffmpeg command with enhanced options
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-i', reference_video_path,  # Input reference video
@@ -466,6 +450,10 @@ class EnhancedAudioVideoUtils:
                 '-c:v', video_codec,    # Video codec (copy = no re-encoding)
                 '-c:a', 'aac',          # Convert audio to AAC
                 '-b:a', '192k',         # Audio bitrate
+                # Add advanced audio encoding options
+                '-profile:a', 'aac_low', # AAC profile
+                '-af', 'aresample=resampler=soxr',  # High quality resampling
+                '-max_muxing_queue_size', '1024',   # Handle large files better
                 output_path,
                 '-y'                    # Overwrite if exists
             ])
@@ -488,7 +476,7 @@ class EnhancedAudioVideoUtils:
     @staticmethod
     def get_video_duration(video_path):
         """
-        Get the duration of a video in seconds using FFprobe
+        Get the duration of a video in seconds using FFprobe for better accuracy
         
         Parameters:
         video_path (str): Path to the video file

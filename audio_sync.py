@@ -1,5 +1,5 @@
 """
-Optimized Audio Synchronization Module focused on content-aware synchronization
+Audio Synchronization Module
 """
 
 import numpy as np
@@ -9,27 +9,17 @@ from scipy import signal
 
 
 class AudioSynchronizer:
-    """Core class for synchronizing audio tracks with a focus on content-aware synchronization"""
+    """Core class for synchronizing audio tracks"""
     
     def __init__(self, window_size=0.1):
         """
         Initialize the audio synchronizer
-        
-        Parameters:
-        window_size (float): Window size in seconds for audio analysis
         """
         self.window_size = window_size
     
     def create_energy_fingerprint(self, audio_data, sr):
         """
         Create a simple fingerprint based on audio energy
-        
-        Parameters:
-        audio_data (numpy.ndarray): Audio data
-        sr (int): Sample rate
-        
-        Returns:
-        numpy.ndarray: Energy fingerprint
         """
         # Calculate number of samples per window
         samples_per_window = int(self.window_size * sr)
@@ -45,17 +35,33 @@ class AudioSynchronizer:
         
         return energy
     
+    def create_onset_fingerprint(self, audio_data, sr):
+        """
+        Create a fingerprint based on onset strength
+        """
+        # Compute onset strength envelope with higher sensitivity
+        hop_length = int(self.window_size * sr)
+        
+        try:
+            onset_env = librosa.onset.onset_strength(
+                y=audio_data, sr=sr, hop_length=hop_length,
+                fmax=8000  # Increase frequency range for better detection
+            )
+            
+            # Normalize the onset envelope
+            if np.max(onset_env) > 0:
+                onset_env = onset_env / np.max(onset_env)
+                
+            return onset_env
+            
+        except Exception as e:
+            print(f"Warning: Error creating onset fingerprint: {e}")
+            print("Falling back to simple energy fingerprint")
+            return self.create_energy_fingerprint(audio_data, sr)
+    
     def find_global_offset(self, ref_fingerprint, foreign_fingerprint, window_size_seconds):
         """
         Find global time offset between two audio tracks using cross-correlation
-        
-        Parameters:
-        ref_fingerprint (numpy.ndarray): Reference fingerprint
-        foreign_fingerprint (numpy.ndarray): Foreign fingerprint
-        window_size_seconds (float): Window size in seconds
-        
-        Returns:
-        tuple: (offset_seconds, correlation, confidence_value)
         """
         # Normalize the fingerprints
         ref_norm = (ref_fingerprint - np.mean(ref_fingerprint)) / (np.std(ref_fingerprint) + 1e-10)
@@ -81,14 +87,6 @@ class AudioSynchronizer:
     def apply_offset(self, audio_data, offset_seconds, sr):
         """
         Apply a global time offset to audio data
-        
-        Parameters:
-        audio_data (numpy.ndarray): Audio data
-        offset_seconds (float): Offset in seconds
-        sr (int): Sample rate
-        
-        Returns:
-        numpy.ndarray: Offset audio data
         """
         offset_samples = int(offset_seconds * sr)
         
@@ -121,14 +119,6 @@ class AudioSynchronizer:
     def time_stretch_audio(self, audio_data, content_ratio, sr):
         """
         Stretch audio to match reference content duration
-        
-        Parameters:
-        audio_data (numpy.ndarray): Audio data
-        content_ratio (float): Ratio for stretching
-        sr (int): Sample rate
-        
-        Returns:
-        numpy.ndarray: Stretched audio data
         """
         if abs(content_ratio - 1.0) < 0.001:
             print("No time-stretching needed (ratio very close to 1.0)")
@@ -147,7 +137,6 @@ class AudioSynchronizer:
         print(f"Content ratio: {content_ratio:.6f}. Will {operation} the audio using atempo={atempo:.6f}")
     
         try:
-            # FFmpeg-based stretching produces better quality results
             print(f"Stretching audio using FFmpeg with atempo={atempo:.6f}")
         
             # Save input to temp file
@@ -233,16 +222,6 @@ class AudioSynchronizer:
     def detect_audio_content(self, audio_data, sr, threshold_db=-40, min_duration=0.2, min_silence_ms=500):
         """
         Detect segments of actual audio content (non-silence) using decibel thresholding
-        
-        Parameters:
-        audio_data (numpy.ndarray): Audio data
-        sr (int): Sample rate
-        threshold_db (float): Threshold in dB for detecting audio content
-        min_duration (float): Minimum duration in seconds for a valid segment
-        min_silence_ms (int): Minimum silence duration in milliseconds to separate segments
-        
-        Returns:
-        list: List of (start_time, end_time) tuples for detected segments
         """
         # Calculate chunk size (in samples) for 10ms chunks
         chunk_size = int(0.01 * sr)  # 10ms chunks
@@ -339,18 +318,6 @@ class AudioSynchronizer:
                                 method='auto', visualize=False, viz_path=None):
         """
         Synchronize foreign audio to reference audio using multi-point content-aware anchoring
-        
-        Parameters:
-        ref_audio (numpy.ndarray): Reference audio data
-        foreign_audio (numpy.ndarray): Foreign audio data
-        ref_sr (int): Reference sample rate
-        foreign_sr (int): Foreign sample rate
-        method (str): Method for synchronization ('auto', 'offset', 'stretch')
-        visualize (bool): Whether to create visualizations
-        viz_path (str): Path to save visualization
-        
-        Returns:
-        tuple: (aligned_audio, sync_info)
         """
         # Detect content segments in both audios
         print("Detecting audio content in reference track...")
@@ -446,13 +413,6 @@ class AudioSynchronizer:
     def _visualize_content_alignment(self, ref_segments, foreign_segments, offset, ratio, save_path):
         """
         Visualize the content-aware alignment between audio tracks
-        
-        Parameters:
-        ref_segments (list): Reference content segments
-        foreign_segments (list): Foreign content segments
-        offset (float): Calculated offset
-        ratio (float): Duration ratio
-        save_path (str): Path to save visualization
         """
         plt.figure(figsize=(12, 8))
         
@@ -462,6 +422,19 @@ class AudioSynchronizer:
             
             # Label first and last segment
             if i == 0 or i == len(ref_segments)-1:
+                plt.text(start, 1.1, f"{start:.2f}s", color='r', fontsize=9, ha='left')
+                plt.text(end, 1.1, f"{end:.2f}s", color='r', fontsize=9, ha='right')
+        
+        # Plot foreign segments (adjusted by offset)
+        for i, (start, end) in enumerate(foreign_segments):
+            # Apply the offset to show where it will be after sync
+            adj_start = (start * ratio) + offset
+            adj_end = (end * ratio) + offset
+            
+            plt.plot([adj_start, adj_end], [0.5, 0.5], 'b-', linewidth=4, alpha=0.6)
+            
+            # Label first and last segment
+            if i == 0 or i == len(foreign_segments)-1:
                 plt.text(adj_start, 0.4, f"{start:.2f}s → {adj_start:.2f}s", 
                         color='b', fontsize=9, ha='left')
                 plt.text(adj_end, 0.4, f"{end:.2f}s → {adj_end:.2f}s", 
@@ -509,21 +482,7 @@ class AudioSynchronizer:
     def synchronize(self, ref_audio, foreign_audio, ref_sr, foreign_sr, method='auto', 
                   visualize=False, viz_path=None, duration_ratio=None):
         """
-        Synchronize foreign audio to reference audio (simplified version)
-        Used as a fallback when content-aware sync can't find segments
-        
-        Parameters:
-        ref_audio (numpy.ndarray): Reference audio data
-        foreign_audio (numpy.ndarray): Foreign audio data
-        ref_sr (int): Reference sample rate
-        foreign_sr (int): Foreign sample rate
-        method (str): Synchronization method
-        visualize (bool): Whether to create visualizations
-        viz_path (str): Path to save visualization
-        duration_ratio (float): Optional pre-calculated duration ratio
-        
-        Returns:
-        tuple: (aligned_audio, sync_info)
+        Synchronize foreign audio to reference audio
         """
         print("Creating audio fingerprints...")
         ref_fingerprint = self.create_energy_fingerprint(ref_audio, ref_sr)
@@ -537,15 +496,92 @@ class AudioSynchronizer:
         
         print(f"Detected global offset: {global_offset:.2f} seconds (confidence: {confidence_value:.2f})")
         
-        # Apply the global offset
-        print("Applying global offset...")
+        # Method selection logic
+        use_stretch = False
         
-        # Apply padding or trimming based on the offset
-        aligned_audio = self.apply_offset(foreign_audio, global_offset, foreign_sr)
+        if method == 'stretch':
+            use_stretch = True
+            print("Using time-stretching method (forced)...")
+        elif method == 'offset':
+            use_stretch = False
+            print("Using global offset method (forced)...")
+        elif confidence_value < 3.0:  # Low correlation confidence suggests need for stretching
+            use_stretch = True
+            print("Using automatic method selection: Stretching (low correlation confidence)")
+        else:
+            use_stretch = False
+            print("Using automatic method selection: Global offset (good correlation)")
         
-        # Apply duration ratio if specified
-        if duration_ratio is not None and abs(duration_ratio - 1.0) > 0.01:
-            print(f"Applying specified duration ratio: {duration_ratio:.4f}")
+        # Apply the selected method
+        if not use_stretch:
+            # For simple cases, just apply the global offset
+            print("Applying global offset...")
+            
+            # Double-check if the offset makes sense
+            if abs(global_offset) > len(foreign_audio) / foreign_sr * 0.9:
+                print(f"Warning: Very large offset detected ({global_offset:.2f}s), possibly incorrect")
+                print("Attempting to refine offset calculation...")
+                
+                # Try with onset features instead of energy
+                ref_onset = self.create_onset_fingerprint(ref_audio, ref_sr)
+                foreign_onset = self.create_onset_fingerprint(foreign_audio, foreign_sr)
+                refined_offset, _, refined_confidence = self.find_global_offset(ref_onset, foreign_onset, self.window_size)
+                
+                if refined_confidence > confidence_value:
+                    print(f"Using refined offset: {refined_offset:.2f}s (confidence: {refined_confidence:.2f})")
+                    global_offset = refined_offset
+                    confidence_value = refined_confidence
+                else:
+                    print("Couldn't find better offset, continuing with original")
+            
+            # Apply padding or trimming based on the offset
+            aligned_audio = self.apply_offset(foreign_audio, global_offset, foreign_sr)
+            
+            # Apply duration ratio if specified
+            if duration_ratio is not None and abs(duration_ratio - 1.0) > 0.01:
+                print(f"Applying specified duration ratio: {duration_ratio:.4f}")
+                if duration_ratio > 1.0:
+                    # Foreign is longer than reference, speed it up
+                    stretch_factor = duration_ratio
+                    operation = "speed up"
+                else:
+                    # Foreign is shorter than reference, slow it down
+                    stretch_factor = 1.0 / duration_ratio
+                    operation = "slow down"
+                
+                print(f"This will {operation} the audio to match reference length")
+                aligned_audio = self.time_stretch_audio(aligned_audio, stretch_factor, foreign_sr)
+            
+            # Verify alignment result
+            if len(aligned_audio) < foreign_sr * 3:  # Less than 3 seconds
+                print("Warning: Resulting audio is very short, offset may be incorrect")
+                print("Reverting to original audio with zero offset")
+                aligned_audio = foreign_audio
+            
+            sync_info = {
+                "method": "global_offset",
+                "offset_seconds": global_offset,
+                "correlation_confidence": confidence_value
+            }
+            
+            if duration_ratio is not None:
+                sync_info["duration_ratio"] = duration_ratio
+                
+        else:
+            # For more complex cases, use time-stretching
+            print("Using time-stretching method...")
+            
+            # Apply the offset first
+            offset_audio = self.apply_offset(foreign_audio, global_offset, foreign_sr)
+            
+            # Determine the stretch factor
+            if duration_ratio is None:
+                # Calculate an approximate stretch factor based on audio lengths
+                ref_duration = len(ref_audio) / ref_sr
+                foreign_duration = len(foreign_audio) / foreign_sr
+                duration_ratio = foreign_duration / ref_duration
+            
+            # Apply time stretching
             if duration_ratio > 1.0:
                 # Foreign is longer than reference, speed it up
                 stretch_factor = duration_ratio
@@ -555,20 +591,19 @@ class AudioSynchronizer:
                 stretch_factor = 1.0 / duration_ratio
                 operation = "slow down"
             
+            print(f"Foreign/reference duration ratio: {duration_ratio:.4f}")
             print(f"This will {operation} the audio to match reference length")
-            aligned_audio = self.time_stretch_audio(aligned_audio, stretch_factor, foreign_sr)
+            
+            aligned_audio = self.time_stretch_audio(offset_audio, stretch_factor, foreign_sr)
+            
+            sync_info = {
+                "method": "time_stretch",
+                "offset_seconds": global_offset,
+                "duration_ratio": duration_ratio,
+                "stretch_factor": stretch_factor
+            }
         
-        # Create sync info
-        sync_info = {
-            "method": "global_offset",
-            "offset_seconds": global_offset,
-            "correlation_confidence": confidence_value
-        }
-        
-        if duration_ratio is not None:
-            sync_info["duration_ratio"] = duration_ratio
-        
-        # Create visualization if requested (simplified version)
+        # Create visualization if requested
         if visualize and viz_path:
             self._visualize_alignment(ref_fingerprint, foreign_fingerprint, global_offset, correlation, viz_path)
         
@@ -576,14 +611,7 @@ class AudioSynchronizer:
     
     def _visualize_alignment(self, ref_fingerprint, foreign_fingerprint, offset, correlation, save_path):
         """
-        Visualize the alignment between two audio tracks (simplified version)
-        
-        Parameters:
-        ref_fingerprint (numpy.ndarray): Reference fingerprint
-        foreign_fingerprint (numpy.ndarray): Foreign fingerprint
-        offset (float): Calculated offset
-        correlation (numpy.ndarray): Cross-correlation data
-        save_path (str): Path to save visualization
+        Visualize the alignment between two audio tracks
         """
         plt.figure(figsize=(12, 10))
         
@@ -613,17 +641,4 @@ class AudioSynchronizer:
         plt.savefig(save_path)
         plt.close()
         
-        print(f"Visualization saved to: {save_path}").text(start, 1.1, f"{start:.2f}s", color='r', fontsize=9, ha='left')
-        plt.text(end, 1.1, f"{end:.2f}s", color='r', fontsize=9, ha='right')
-        
-        # Plot foreign segments (adjusted by offset)
-        for i, (start, end) in enumerate(foreign_segments):
-            # Apply the offset to show where it will be after sync
-            adj_start = (start * ratio) + offset
-            adj_end = (end * ratio) + offset
-            
-            plt.plot([adj_start, adj_end], [0.5, 0.5], 'b-', linewidth=4, alpha=0.6)
-            
-            # Label first and last segment
-            if i == 0 or i == len(foreign_segments)-1:
-                plt
+        print(f"Visualization saved to: {save_path}")
