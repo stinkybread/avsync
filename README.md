@@ -1,71 +1,207 @@
-# avsync
-A powerful and intelligent video synchronization tool that aligns foreign audio tracks with reference videos using advanced visual detection and content-aware audio analysis. This tool grew out of the need for better synchronization between foreign language video (eg Hindi NTSC DVDs) and higher-quality reference videos (R2 Japanese DVDs or UK PAL DVDs), particularly for preserving the viewing experience across different language versions of the same content, where there are multi issues for sync. Code created using Claude.
+# AVSync - Audio-Video Synchronization Tool
 
-# Features
+![Python](https://img.shields.io/badge/python-3.7+-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![FFmpeg](https://img.shields.io/badge/requires-FFmpeg-red.svg)
 
-1. Hybrid Synchronization: Combines visual feature matching (SIFT) with content-aware audio detection for precise alignment
-2. Smart Frame Extraction: Uses scene detection technology to identify key frames for optimal comparison
-3. Temporal Consistency: Ensures natural timing throughout synchronized content
-4. Content-Aware Audio Processing: Intelligently identifies audio segments for improved alignment
-5. Multiple Audio Track Support: Preserves original audio tracks while adding synchronized foreign tracks
-6. Advanced Visualization: Generate detailed sync maps and match visualizations to verify alignment quality
-7. Flexible Processing: Customizable parameters for threshold sensitivity, frame counts, and preprocessing options
+AVSync is a powerful Python tool that automatically synchronizes foreign audio tracks to reference videos using advanced visual anchor detection and precise audio timing algorithms. Perfect for dubbing, multilingual content creation, and audio replacement workflows.
 
-Ideal For
+## ✨ Features
 
-1. Synchronizing dubbed audio with original video
-2. Aligning multiple language tracks for multilingual releases across different media
-3. Fixing audio/video sync issues in existing media
+- **🎯 Visual Anchor Detection**: Uses scene change detection and template matching to find corresponding frames between videos
+- **🔊 Precise Audio Timing**: Iterative audio processing with millisecond-level precision
+- **🌍 Multi-language Support**: Automatic audio stream detection by language codes
+- **📊 Quality Control**: Generate side-by-side comparison images and detailed CSV reports
+- **⚡ Parallel Processing**: Multi-threaded frame matching for faster processing
+- **🎛️ Flexible Configuration**: Extensive customization options for different content types
+- **📈 Progress Tracking**: Beautiful colored console output with progress bars
 
-# Requirements & Dependencies
+## 🎬 How It Works
 
-Dependencies:
-1. Python 3.x
-2. NumPy
-3. OpenCV (cv2)
-4. scipy
-5. matplotlib
-6. librosa
-7. soundfile
-8. scikit-learn
-9. FFmpeg (external command-line tool)
+1. **Image Pairing Stage**: Extracts scene change frames and matches them between reference and foreign videos
+2. **Audio Synchronization Stage**: Processes audio segments iteratively to match reference timing precisely
+3. **Muxing Stage**: Combines reference video, original audio, and synchronized foreign audio into final output
 
-Installation Command:
+## 📋 Requirements
 
-```pip install numpy opencv-python scipy matplotlib librosa soundfile scikit-learn```
+### System Dependencies
+- **FFmpeg** and **FFprobe** (must be in system PATH)
+- Python 3.7 or higher
 
-Additionally, you'll need to install FFmpeg separately since it's an external command-line tool:
+### Python Dependencies
+```bash
+pip install opencv-python scipy numpy tqdm
+```
 
-For Windows (using Chocolatey):
+### Optional Dependencies (for enhanced features)
+```bash
+pip install Pillow imagehash  # For similarity filtering
+```
 
-```choco install ffmpeg```
+## 🚀 Installation
 
-For macOS (using Homebrew):
+1. **Clone the repository**:
+```bash
+git clone https://github.com/stinkybread/avsync.git
+cd avsync
+```
 
-```brew install ffmpeg```
+2. **Install Python dependencies**:
+```bash
+pip install -r requirements.txt
+```
 
-For Ubuntu/Debian:
+3. **Install FFmpeg**:
+   - **Windows**: Download from [FFmpeg.org](https://ffmpeg.org/download.html) or use `winget install FFmpeg`
+   - **macOS**: `brew install ffmpeg`
+   - **Linux**: `sudo apt install ffmpeg` (Ubuntu/Debian) or equivalent
 
-```sudo apt-get update```
+4. **Verify installation**:
+```bash
+python AVSync.py --help
+```
 
-```sudo apt-get install ffmpeg```
+## 💡 Usage
 
-Make sure FFmpeg is available in your system PATH so the Python scripts can call it properly.
+### Basic Usage
+```bash
+python AVSync.py reference_video.mkv foreign_video.mkv output_video.mkv
+```
 
-# Command & Options
-```python AudioSynchronizer.py "E:\Base\Upscaled Episodes\015.mkv" "E:\Base\Hindi Episodes\015.mkv" "E:\Base\Muxed Episodes\015.mkv" --feature sift --sample-mode multi_pass --max-frames 500 --max-comparisons 5000 --scene-threshold 0.25 --db-threshold -40 --min-duration 0.2 --min-silence 500 --temporal-consistency --enhanced-preprocessing --visualize --use-scene-detect --content-aware --preserve-aspect-ratio --force-track 0```
+### Advanced Examples
 
-1. ```--feature```: Selects visual feature extraction method (currently only 'sift')
-2. ```--sample-mode```: Controls frame sampling strategy (currently only 'multi_pass')
-3. ```--use-scene-detect```: Enables scene change detection for frame extraction
-4. ```--scene-threshold```: Sets sensitivity threshold for scene detection (0-1)
-5. ```--temporal-consistency```: Enforces time consistency in visual sync
-6. ```--enhanced-preprocessing```: Applies additional image preprocessing for better matching
-7. ```--content-aware```: Enables content-aware audio synchronization
-8. ```--db-threshold```: Sets audio detection threshold in dB
-9. ```--min-duration```: Sets minimum audio segment duration in seconds
-10. ```--min-silence```: Sets minimum silence duration in milliseconds
-11. ```--force-track```: Forces use of specific audio track number
-12. ```--keep-temp```: Keeps temporary files after completio
-13. ```--visualize```: Creates visualizations of the alignment process
-14. ```--preserve-aspect-ratio```: Maintains aspect ratio when resizing frames
+**Specify language codes:**
+```bash
+python AVSync.py ref.mkv foreign.mkv output.mkv --ref_lang eng --foreign_lang spa
+```
+
+**Use specific audio stream indices:**
+```bash
+python AVSync.py ref.mkv foreign.mkv output.mkv --ref_stream_idx 1 --foreign_stream_idx 2
+```
+
+**Generate QC images and CSV report:**
+```bash
+python AVSync.py ref.mkv foreign.mkv output.mkv \
+  --qc_output_dir ./qc_images \
+  --output_csv segments.csv
+```
+
+**Keep synchronized audio file:**
+```bash
+python AVSync.py ref.mkv foreign.mkv output.mkv --output_audio synced_audio.wav
+```
+
+**Fine-tune processing parameters:**
+```bash
+python AVSync.py ref.mkv foreign.mkv output.mkv \
+  --scene_threshold 0.3 \
+  --match_threshold 0.8 \
+  --min_segment_duration 10 \
+  --db_threshold -35
+```
+
+## ⚙️ Configuration Options
+
+### Image Pairing Parameters
+- `--scene_threshold`: Scene change detection sensitivity (0.0-1.0, default: 0.25)
+- `--match_threshold`: Template matching threshold (0.0-1.0, default: 0.7)
+- `--similarity_threshold`: Perceptual hash difference threshold (default: 4, -1 to disable)
+
+### Audio Processing Parameters
+- `--ref_lang` / `--foreign_lang`: Language codes for audio stream selection
+- `--db_threshold`: Audio detection threshold in dBFS (default: -40.0)
+- `--min_segment_duration`: Minimum segment duration in seconds (default: 5.0)
+- `--ref_stream_idx` / `--foreign_stream_idx`: Force specific audio stream indices
+
+### Output Options
+- `--output_audio`: Save synchronized audio as WAV file
+- `--output_csv`: Export segment timing information
+- `--qc_output_dir`: Generate quality control images
+- `--mux_foreign_codec`: Audio codec for foreign track (default: aac)
+- `--mux_foreign_bitrate`: Bitrate for foreign track (default: 192k)
+
+## 📊 Output Files
+
+### Primary Output
+- **Video File**: Reference video + original audio + synchronized foreign audio
+
+### Optional Outputs
+- **Synchronized Audio**: WAV file with precisely timed foreign audio
+- **QC Images**: Side-by-side frame comparisons for visual verification
+- **CSV Report**: Detailed segment timing and processing statistics
+
+## 🎯 Tips for Best Results
+
+### Video Content
+- ✅ Use videos with clear scene changes and visual landmarks
+- ✅ Ensure good video quality for accurate frame matching
+- ✅ Ensure both reference and foreign video are essentially the same bar the video (extra ads, different intro lengths etc will throw this off)
+
+### Audio Content
+- ✅ Ensure audio tracks have clear content boundaries as best as you can 
+- ✅ Use similar audio quality between reference and foreign tracks
+
+### Parameter Tuning
+- **Lower scene threshold**: Detects more frames (more anchor points)
+- **Higher match threshold**: Stricter frame matching (fewer false positives)
+- **Longer min segment duration**: Fewer, longer segments (more stable sync)
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+**"FFmpeg not found"**
+- Ensure FFmpeg is installed and in your system PATH
+- Test with `ffmpeg -version` in terminal
+
+**"No matches found"**
+- Try lowering `--scene_threshold` (e.g., 0.15)
+- Try lowering `--match_threshold` (e.g., 0.6)
+- Check that videos actually correspond to each other
+
+**Audio sync drift**
+- Adjust `--min_segment_duration` for your content type
+- Check `--db_threshold` if audio boundaries are incorrectly detected
+- Review QC images to verify visual anchor quality
+
+**Performance issues**
+- Reduce video resolution for faster processing
+- Adjust `--similarity_threshold` to reduce redundant anchors
+- Use SSD storage for temporary files
+
+## 📈 Performance Notes
+
+- Processing time scales with video length and frame extraction count
+- Typical processing speed: 1-5x real-time depending on content and hardware
+- Memory usage peaks during frame extraction and comparison phases
+- Temporary disk space required: ~2-10GB for feature-length content
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+### Development Setup
+```bash
+git clone https://github.com/stinkybread/avsync.git
+cd avsync
+pip install -r requirements-dev.txt
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- FFmpeg team for the excellent multimedia framework
+- OpenCV community for computer vision tools
+- SciPy contributors for audio processing capabilities
+
+## 📞 Support
+
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/stinkybread/avsync/issues)
+- 💡 **Feature Requests**: [GitHub Discussions](https://github.com/stinkybread/avsync/discussions)
+- 📧 **Email**: vaibhav.bhat@gmail.com
+
+---
