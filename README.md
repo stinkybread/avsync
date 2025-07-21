@@ -136,7 +136,7 @@ python AVSync.py ref.mkv foreign.mkv output.mkv \
 ### Video Content
 - ✅ Use videos with clear scene changes and visual landmarks
 - ✅ Ensure good video quality for accurate frame matching
-- ✅ Ensure both reference and foreign video are essentially the same bar the video (extra ads, different intro lengths etc will throw this off)
+- ✅ Ensure both reference and foreign video are essentially the same bar the audio (extra ads, different intro lengths etc will throw this off)
 
 ### Audio Content
 - ✅ Ensure audio tracks have clear content boundaries as best as you can 
