@@ -71,12 +71,10 @@
       }
     ],
     "win": {
-      "target": ["nsis", "portable"],
-      "icon": "resources/icon.ico"
+      "target": ["nsis", "portable"]
     },
     "mac": {
       "target": ["dmg", "zip"],
-      "icon": "resources/icon.icns",
       "category": "public.app-category.video"
     },
     "nsis": {

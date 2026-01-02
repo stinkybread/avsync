@@ -14,7 +14,8 @@ function getResourcePath(relativePath: string): string {
     // In development, resources are in the project root
     return path.join(__dirname, '..', relativePath);
   }
-  // In production, resources are bundled by electron-builder
+  // In production, resources are bundled by electron-builder in process.resourcesPath
+  // extraResources are placed directly in process.resourcesPath, not nested in 'resources'
   return path.join(process.resourcesPath, relativePath);
 }
 
@@ -24,11 +25,18 @@ function getBinaryPath(binaryName: string): string {
 
   // AVSync uses its own folder structure (PyInstaller bundle)
   if (binaryName === 'avsync') {
-    return getResourcePath(path.join('resources', 'avsync', binaryFile));
+    if (isDev) {
+      return getResourcePath(path.join('resources', 'avsync', binaryFile));
+    }
+    // In production, extraResources are copied to process.resourcesPath/avsync
+    return getResourcePath(path.join('avsync', binaryFile));
   }
 
-  // Other binaries are in resources/bin
-  return getResourcePath(path.join('resources', 'bin', binaryFile));
+  // Other binaries are in resources/bin in dev, bin in production
+  if (isDev) {
+    return getResourcePath(path.join('resources', 'bin', binaryFile));
+  }
+  return getResourcePath(path.join('bin', binaryFile));
 }
 
 function createWindow() {
