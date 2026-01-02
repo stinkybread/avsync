@@ -8,7 +8,7 @@
 
 A powerful desktop application for automatically synchronizing foreign audio tracks to reference videos. Built with Electron, React, and TypeScript, powered by the AVSync Python engine with advanced visual anchor detection and precise audio timing algorithms.
 
-![AVSync Desktop Screenshot](docs/screenshot.png)
+![AVSync Night](https://github.com/stinkybread/avsync/blob/main/Main_Night.png)) ![AvSync Day](https://github.com/stinkybread/avsync/blob/main/Main_Day.png)
 
 ## ✨ Features
 
