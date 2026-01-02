@@ -1,203 +1,207 @@
-# AVSync Desktop
+# AVSync - Audio-Video Synchronization Tool
 
-A desktop application for audio/video synchronization built with Electron and React.
+![Python](https://img.shields.io/badge/python-3.7+-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![FFmpeg](https://img.shields.io/badge/requires-FFmpeg-red.svg)
 
-## Features
+AVSync is a powerful Python tool that automatically synchronizes foreign audio tracks to reference videos using advanced visual anchor detection and precise audio timing algorithms. Perfect for dubbing, multilingual content creation, and audio replacement workflows.
 
-- **Intuitive UI**: Modern React-based interface with video preview and frame-by-frame navigation
-- **Video Preview**: View and navigate both reference and foreign videos frame-by-frame
-- **Manual Sync Points**: Define precise synchronization points with visual feedback
-- **Real-time Logging**: Monitor processing progress with real-time log output
-- **Comprehensive Parameters**: Full control over all AVSync parameters through the UI
-- **Cross-platform**: Builds for Windows and macOS
+## ✨ Features
 
-## Prerequisites
+- **🎯 Visual Anchor Detection**: Uses scene change detection and template matching to find corresponding frames between videos
+- **🔊 Precise Audio Timing**: Iterative audio processing with millisecond-level precision
+- **🌍 Multi-language Support**: Automatic audio stream detection by language codes
+- **📊 Quality Control**: Generate side-by-side comparison images and detailed CSV reports
+- **⚡ Parallel Processing**: Multi-threaded frame matching for faster processing
+- **🎛️ Flexible Configuration**: Extensive customization options for different content types
+- **📈 Progress Tracking**: Beautiful colored console output with progress bars
 
-### For Development
+## 🎬 How It Works
 
-- Node.js 18+ and npm
-- Python 3.8+ with pip
-- PyInstaller
-- FFmpeg binaries
-- MKVToolNix binaries
+1. **Image Pairing Stage**: Extracts scene change frames and matches them between reference and foreign videos
+2. **Audio Synchronization Stage**: Processes audio segments iteratively to match reference timing precisely
+3. **Muxing Stage**: Combines reference video, original audio, and synchronized foreign audio into final output
 
-### For Building
+## 📋 Requirements
 
-All the same as development, plus:
-- electron-builder dependencies for your platform
+### System Dependencies
+- **FFmpeg** and **FFprobe** (must be in system PATH)
+- Python 3.7 or higher
 
-## Installation
-
-### 1. Install Node Dependencies
-
+### Python Dependencies
 ```bash
-npm install
+pip install opencv-python scipy numpy tqdm
 ```
 
-### 2. Install Python Dependencies
+### Optional Dependencies (for enhanced features)
+```bash
+pip install Pillow imagehash  # For similarity filtering
+```
 
+## 🚀 Installation
+
+1. **Clone the repository**:
+```bash
+git clone https://github.com/stinkybread/avsync.git
+cd avsync
+```
+
+2. **Install Python dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
 
-Create a `requirements.txt` file:
-```
-opencv-python
-numpy
-scipy
-tqdm
-```
+3. **Install FFmpeg**:
+   - **Windows**: Download from [FFmpeg.org](https://ffmpeg.org/download.html) or use `winget install FFmpeg`
+   - **macOS**: `brew install ffmpeg`
+   - **Linux**: `sudo apt install ffmpeg` (Ubuntu/Debian) or equivalent
 
-### 3. Build the AVSync Executable
-
+4. **Verify installation**:
 ```bash
-npm run build:pyinstaller
+python AVSync.py --help
 ```
 
-This will create the executable in `dist/avsync/`.
+## 💡 Usage
 
-### 4. Download Required Binaries
-
-Download and place the following binaries in `resources/bin/`:
-
-#### Windows:
-- `ffmpeg.exe` - Download from https://ffmpeg.org/download.html
-- `ffprobe.exe` - Included with FFmpeg
-- `mkvmerge.exe` - Download from https://mkvtoolnix.download/
-
-#### macOS:
-- `ffmpeg` - Install via Homebrew: `brew install ffmpeg`
-- `ffprobe` - Included with FFmpeg
-- `mkvmerge` - Install via Homebrew: `brew install mkvtoolnix`
-
-Copy the binaries to `resources/bin/`:
+### Basic Usage
 ```bash
-mkdir -p resources/bin
-# Copy your downloaded binaries here
+python AVSync.py reference_video.mkv foreign_video.mkv output_video.mkv
 ```
 
-### 5. Copy AVSync Executable
+### Advanced Examples
 
-Copy the PyInstaller-built AVSync executable to the resources:
-
+**Specify language codes:**
 ```bash
-# Windows
-copy dist\avsync\avsync.exe resources\bin\
-
-# macOS/Linux
-cp dist/avsync/avsync resources/bin/
+python AVSync.py ref.mkv foreign.mkv output.mkv --ref_lang eng --foreign_lang spa
 ```
 
-## Development
-
-Run the development server:
-
+**Use specific audio stream indices:**
 ```bash
-npm run dev
+python AVSync.py ref.mkv foreign.mkv output.mkv --ref_stream_idx 1 --foreign_stream_idx 2
 ```
 
-This will:
-1. Start the Vite dev server on http://localhost:5173
-2. Launch Electron in development mode with hot-reload
-
-## Building for Distribution
-
-### Windows
-
+**Generate QC images and CSV report:**
 ```bash
-npm run package:win
+python AVSync.py ref.mkv foreign.mkv output.mkv \
+  --qc_output_dir ./qc_images \
+  --output_csv segments.csv
 ```
 
-Creates:
-- NSIS installer in `release/`
-- Portable executable in `release/`
-
-### macOS
-
+**Keep synchronized audio file:**
 ```bash
-npm run package:mac
+python AVSync.py ref.mkv foreign.mkv output.mkv --output_audio synced_audio.wav
 ```
 
-Creates:
-- DMG installer in `release/`
-- ZIP archive in `release/`
-
-## Project Structure
-
-```
-AVSync/
-├── electron/              # Electron main process
-│   ├── main.ts           # Main process entry point
-│   └── preload.ts        # Preload script for IPC
-├── src/                  # React application
-│   ├── components/       # React components
-│   │   ├── Header.tsx
-│   │   ├── FileSelector.tsx
-│   │   ├── VideoPreview.tsx
-│   │   ├── SyncPointEditor.tsx
-│   │   ├── ParametersPanel.tsx
-│   │   └── LogViewer.tsx
-│   ├── App.tsx          # Main app component
-│   ├── main.tsx         # React entry point
-│   └── index.css        # Global styles
-├── resources/           # Application resources
-│   └── bin/            # Bundled binaries
-│       ├── avsync.exe  # PyInstaller-built AVSync
-│       ├── ffmpeg.exe
-│       ├── ffprobe.exe
-│       └── mkvmerge.exe
-├── AVSync_v12.py       # Original Python script
-├── avsync.spec         # PyInstaller spec file
-├── package.json        # Node dependencies and scripts
-├── tsconfig.json       # TypeScript config
-└── vite.config.ts      # Vite config
+**Fine-tune processing parameters:**
+```bash
+python AVSync.py ref.mkv foreign.mkv output.mkv \
+  --scene_threshold 0.3 \
+  --match_threshold 0.8 \
+  --min_segment_duration 10 \
+  --db_threshold -35
 ```
 
-## Usage
+## ⚙️ Configuration Options
 
-1. **Select Videos**: Choose your reference video (original) and foreign video (to sync)
-2. **Choose Output**: Select where to save the synchronized output file
-3. **Set Parameters**: Adjust AVSync parameters in the right panel (or use defaults)
-4. **Add Sync Points** (Optional):
-   - Navigate to matching frames in both videos
-   - Click "Add Sync Point" to manually specify synchronization points
-5. **Run AVSync**: Click the "Run AVSync" button to start processing
-6. **Monitor Progress**: Watch real-time logs in the log viewer
+### Image Pairing Parameters
+- `--scene_threshold`: Scene change detection sensitivity (0.0-1.0, default: 0.25)
+- `--match_threshold`: Template matching threshold (0.0-1.0, default: 0.7)
+- `--similarity_threshold`: Perceptual hash difference threshold (default: 4, -1 to disable)
 
-## Keyboard Shortcuts
+### Audio Processing Parameters
+- `--ref_lang` / `--foreign_lang`: Language codes for audio stream selection
+- `--db_threshold`: Audio detection threshold in dBFS (default: -40.0)
+- `--min_segment_duration`: Minimum segment duration in seconds (default: 5.0)
+- `--ref_stream_idx` / `--foreign_stream_idx`: Force specific audio stream indices
 
-### Video Navigation
-- Frame navigation buttons for precise control
-- Timeline slider for quick seeking
-- Time jump buttons (-10s, -1s, +1s, +10s)
+### Output Options
+- `--output_audio`: Save synchronized audio as WAV file
+- `--output_csv`: Export segment timing information
+- `--qc_output_dir`: Generate quality control images
+- `--mux_foreign_codec`: Audio codec for foreign track (default: aac)
+- `--mux_foreign_bitrate`: Bitrate for foreign track (default: 192k)
 
-## Troubleshooting
+## 📊 Output Files
 
-### Binaries Not Found
+### Primary Output
+- **Video File**: Reference video + original audio + synchronized foreign audio
 
-If you see errors about missing binaries:
-1. Ensure all binaries are in `resources/bin/` directory
-2. On macOS/Linux, ensure binaries have execute permissions: `chmod +x resources/bin/*`
-3. Rebuild the application: `npm run build && npm run package`
+### Optional Outputs
+- **Synchronized Audio**: WAV file with precisely timed foreign audio
+- **QC Images**: Side-by-side frame comparisons for visual verification
+- **CSV Report**: Detailed segment timing and processing statistics
 
-### PyInstaller Build Fails
+## 🎯 Tips for Best Results
 
-If PyInstaller fails to build:
-1. Ensure all Python dependencies are installed: `pip install -r requirements.txt`
-2. Try building with verbose output: `pyinstaller --clean avsync.spec`
-3. Check that AVSync_v12.py has no syntax errors
+### Video Content
+- ✅ Use videos with clear scene changes and visual landmarks
+- ✅ Ensure good video quality for accurate frame matching
+- ✅ Ensure both reference and foreign video are essentially the same bar the audio (extra ads, different intro lengths etc will throw this off)
 
-### FFmpeg/FFprobe Not Working
+### Audio Content
+- ✅ Ensure audio tracks have clear content boundaries as best as you can 
+- ✅ Use similar audio quality between reference and foreign tracks
 
-1. Test binaries directly from command line
-2. Ensure correct binaries for your platform (Windows .exe vs Unix binaries)
-3. Check file permissions
+### Parameter Tuning
+- **Lower scene threshold**: Detects more frames (more anchor points)
+- **Higher match threshold**: Stricter frame matching (fewer false positives)
+- **Longer min segment duration**: Fewer, longer segments (more stable sync)
 
-## License
+## 🔧 Troubleshooting
 
-MIT
+### Common Issues
 
-## Credits
+**"FFmpeg not found"**
+- Ensure FFmpeg is installed and in your system PATH
+- Test with `ffmpeg -version` in terminal
 
-AVSync algorithm and Python implementation by Vaibhav
-Desktop UI built with Electron, React, and TypeScript
+**"No matches found"**
+- Try lowering `--scene_threshold` (e.g., 0.15)
+- Try lowering `--match_threshold` (e.g., 0.6)
+- Check that videos actually correspond to each other
+
+**Audio sync drift**
+- Adjust `--min_segment_duration` for your content type
+- Check `--db_threshold` if audio boundaries are incorrectly detected
+- Review QC images to verify visual anchor quality
+
+**Performance issues**
+- Reduce video resolution for faster processing
+- Adjust `--similarity_threshold` to reduce redundant anchors
+- Use SSD storage for temporary files
+
+## 📈 Performance Notes
+
+- Processing time scales with video length and frame extraction count
+- Typical processing speed: 1-5x real-time depending on content and hardware
+- Memory usage peaks during frame extraction and comparison phases
+- Temporary disk space required: ~2-10GB for feature-length content
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+### Development Setup
+```bash
+git clone https://github.com/stinkybread/avsync.git
+cd avsync
+pip install -r requirements-dev.txt
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- FFmpeg team for the excellent multimedia framework
+- OpenCV community for computer vision tools
+- SciPy contributors for audio processing capabilities
+
+## 📞 Support
+
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/stinkybread/avsync/issues)
+- 💡 **Feature Requests**: [GitHub Discussions](https://github.com/stinkybread/avsync/discussions)
+- 📧 **Email**: vaibhav.bhat@gmail.com
+
+---
