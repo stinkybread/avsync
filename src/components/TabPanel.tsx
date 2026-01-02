@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react'
 import './TabPanel.css'
+import logoSvg from '/logo.svg?url'
 
 interface Tab {
   id: string
@@ -35,7 +36,7 @@ export default function TabPanel({ tabs, defaultTab, theme, onToggleTheme, activ
     <div className="tab-panel">
       <div className="tab-panel-header">
         <div className="app-branding">
-          <img src="/logo.svg" alt="AVSync Logo" className="app-logo" width="32" height="32" style={{ filter: 'invert(77%) sepia(82%) saturate(439%) hue-rotate(359deg) brightness(98%) contrast(98%)' }} />
+          <img src={logoSvg} alt="AVSync Logo" className="app-logo" width="32" height="32" style={{ filter: 'invert(77%) sepia(82%) saturate(439%) hue-rotate(359deg) brightness(98%) contrast(98%)' }} />
           <div className="app-branding-text">
             <h1 className="app-title">
               AVSync <span className="app-subtitle">Automated Audio Video Synchronization</span>
