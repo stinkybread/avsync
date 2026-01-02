@@ -78,8 +78,8 @@ pip install -r requirements.txt
 Download FFmpeg (full build with SoxR) and MKVToolNix binaries and place them in `resources/bin/`:
 
 **FFmpeg (Recommended):**
-- Download from: https://www.gyan.dev/ffmpeg/builds/
-- Get: `ffmpeg-release-full.7z`
+- Download from: https://ffbinaries.com/downloads
+- Get the latest FFmpeg build for your platform
 - Extract and copy `ffmpeg.exe` and `ffprobe.exe` to `resources/bin/`
 
 **MKVToolNix:**
@@ -227,7 +227,7 @@ avsync/
 
 ### "SoxR resampler unavailable"
 - Download FFmpeg **full build** (not essentials)
-- Use builds from https://www.gyan.dev/ffmpeg/builds/
+- Use builds from https://ffbinaries.com/downloads
 
 ### Build Errors
 ```bash
