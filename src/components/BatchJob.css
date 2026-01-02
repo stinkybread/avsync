@@ -1,0 +1,284 @@
+.batch-job {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.batch-folders {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+}
+
+.folder-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.folder-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folder-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.folder-input-group {
+  display: flex;
+  gap: 12px;
+}
+
+.folder-input {
+  flex: 1;
+  padding: 10px 14px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.folder-input::placeholder {
+  color: var(--text-muted);
+}
+
+.btn-browse {
+  padding: 10px 20px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-browse:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent-primary);
+}
+
+.btn-load-jobs {
+  width: 100%;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  color: white;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-load-jobs:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(122, 162, 247, 0.3);
+}
+
+.btn-load-jobs:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.batch-info {
+  padding: 20px;
+  background-color: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+}
+
+.batch-info-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin: 0;
+}
+
+.btn-add-to-queue-bottom {
+  padding: 12px 24px;
+  background-color: var(--accent-green);
+  color: white;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.2s;
+}
+
+.btn-add-to-queue-bottom:hover {
+  background-color: #7fb859;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(156, 220, 117, 0.3);
+}
+
+.batch-staging {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+}
+
+.staging-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+
+.btn-add-to-queue {
+  padding: 10px 16px;
+  background-color: var(--accent-green);
+  color: white;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.btn-add-to-queue:hover {
+  background-color: #7fb859;
+}
+
+.batch-table-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.batch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.batch-table thead th {
+  padding: 12px 8px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 2px solid var(--border-color);
+  background-color: var(--bg-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.batch-table tbody tr {
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s;
+}
+
+.batch-table tbody tr:hover {
+  background-color: var(--bg-secondary);
+}
+
+.batch-table tbody tr.editing {
+  background-color: var(--bg-tertiary);
+}
+
+.batch-table td {
+  padding: 12px 8px;
+  color: var(--text-primary);
+}
+
+.file-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-cell.editable {
+  cursor: pointer;
+}
+
+.num-cell {
+  width: 80px;
+  text-align: center;
+}
+
+.checkbox-cell {
+  width: 80px;
+  text-align: center;
+}
+
+.checkbox-cell input[type="checkbox"] {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+}
+
+.actions-cell {
+  width: 150px;
+  text-align: right;
+}
+
+.cell-input,
+.cell-input-num {
+  width: 100%;
+  padding: 4px 8px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.cell-input-num {
+  text-align: center;
+}
+
+.btn-action {
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 4px;
+  transition: all 0.2s;
+}
+
+.btn-edit {
+  background-color: var(--accent-blue);
+  color: white;
+}
+
+.btn-edit:hover {
+  background-color: #3a8ed1;
+}
+
+.btn-remove {
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.btn-remove:hover {
+  background-color: var(--accent-red);
+  color: white;
+}
+
+.btn-done {
+  background-color: var(--accent-green);
+  color: white;
+}
+
+.btn-done:hover {
+  background-color: #7fb859;
+}

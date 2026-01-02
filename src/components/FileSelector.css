@@ -1,0 +1,89 @@
+.file-selector {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-title svg {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.file-input-group {
+  margin-bottom: 16px;
+}
+
+.file-input-group:last-child {
+  margin-bottom: 0;
+}
+
+.file-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.file-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.btn-select {
+  padding: 8px 14px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-select:hover {
+  background-color: var(--bg-hover);
+}
+
+.file-path {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-info {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.file-placeholder {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}

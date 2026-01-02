@@ -1,0 +1,6 @@
+# This file ensures the bin directory is tracked by git
+# Place your binary files here:
+# - avsync.exe (Windows) or avsync (Unix)
+# - ffmpeg.exe (Windows) or ffmpeg (Unix)
+# - ffprobe.exe (Windows) or ffprobe (Unix)
+# - mkvmerge.exe (Windows) or mkvmerge (Unix)

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(npm run build:electron:*)",
+      "Bash(xcopy:*)",
+      "Bash(robocopy:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File:*)",
+      "Bash(powershell:*)",
+      "Bash(ls:*)",
+      "Bash(pip install:*)",
+      "Bash(venv\\Scripts\\activate:*)",
+      "Bash(pyinstaller:*)",
+      "Bash(python -m PyInstaller:*)",
+      "Bash(venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(timeout /t 6)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

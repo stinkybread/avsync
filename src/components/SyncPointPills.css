@@ -1,0 +1,265 @@
+.sync-point-pills {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border-radius: 8px;
+  overflow: hidden;
+  height: 100%;
+}
+
+.sync-pills-header {
+  padding: 16px 20px 16px 8px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--bg-tertiary);
+}
+
+.sync-pills-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sync-pills-title svg {
+  color: var(--accent-primary);
+}
+
+.info-tooltip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.info-tooltip:hover {
+  opacity: 1;
+}
+
+.sync-count {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  background-color: var(--accent-primary);
+  color: white;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.btn-clear-all {
+  padding: 6px 12px;
+  background-color: var(--bg-primary);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-clear-all:hover:not(:disabled) {
+  background-color: var(--accent-red);
+  color: white;
+}
+
+.btn-clear-all:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sync-pills-container {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sync-pills-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+}
+
+.sync-pills-empty p {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.sync-pills-empty span {
+  font-size: 12px;
+}
+
+.sync-pills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.sync-pill.editing {
+  flex: 1 0 100%;
+  border-radius: 8px;
+  background-color: var(--bg-primary);
+  border-color: var(--accent-primary);
+  padding: 12px 16px;
+}
+
+.sync-pill:not(.editing):hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent-primary);
+}
+
+.pill-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background-color: var(--accent-primary);
+  color: white;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.pill-times {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex: 1;
+}
+
+.pill-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.pill-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  transition: all 0.2s;
+}
+
+.pill-action-btn:hover {
+  background-color: var(--bg-primary);
+}
+
+.pill-action-btn.edit:hover {
+  color: var(--accent-blue);
+}
+
+.pill-action-btn.remove:hover {
+  color: var(--accent-red);
+}
+
+.sync-pill-edit {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.edit-inputs {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex: 1;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.edit-field label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.edit-input {
+  padding: 6px 10px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  width: 120px;
+}
+
+.edit-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.edit-separator {
+  color: var(--accent-primary);
+  font-weight: bold;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.edit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.edit-btn.save {
+  background-color: var(--accent-green);
+  color: white;
+}
+
+.edit-btn.save:hover {
+  background-color: #059669;
+}
+
+.edit-btn.cancel {
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.edit-btn.cancel:hover {
+  background-color: var(--accent-red);
+  color: white;
+}

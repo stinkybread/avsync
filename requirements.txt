@@ -1,0 +1,7 @@
+opencv-python>=4.8.0
+numpy>=1.24.0
+scipy>=1.11.0
+tqdm>=4.66.0
+pyinstaller>=6.3.0
+imagehash>=4.3.0
+Pillow>=10.0.0

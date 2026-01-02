@@ -1,0 +1,125 @@
+.log-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.log-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+
+.log-header .section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.log-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--accent-blue);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bg-tertiary);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.btn-log-action {
+  padding: 6px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-log-action:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.log-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: var(--bg-primary);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 0;
+}
+
+.log-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.log-lines {
+  padding: 16px 20px;
+}
+
+.log-line {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0;
+  word-break: break-word;
+}
+
+.log-timestamp {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.log-message {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.log-stderr .log-message {
+  color: var(--accent-orange);
+}
+
+.log-error .log-message {
+  color: var(--accent-red);
+  font-weight: 500;
+}
+
+.log-success .log-message {
+  color: var(--accent-green);
+  font-weight: 500;
+}
