@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Generate AVSync Icons</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            margin: 10px;
+        }
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        .preview {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        h1 { color: #1f2937; }
+        .instruction {
+            background: #f3f4f6;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>AVSync Icon Generator</h1>
+    <p>This tool generates PNG icons for your Electron app from the SVG logo.</p>
+
+    <div class="instruction">
+        <strong>Instructions:</strong>
+        <ol>
+            <li>Click the buttons below to download each icon size</li>
+            <li>Save them to the <code>resources/</code> folder with the exact names shown</li>
+            <li>The build process will automatically use these icons</li>
+        </ol>
+    </div>
+
+    <div class="preview">
+        <div>
+            <h3>256x256 (Windows Icon)</h3>
+            <canvas id="canvas256" width="256" height="256"></canvas>
+            <br>
+            <button onclick="download256()">Download icon.png (256x256)</button>
+        </div>
+        <div>
+            <h3>512x512 (macOS Icon)</h3>
+            <canvas id="canvas512" width="512" height="512"></canvas>
+            <br>
+            <button onclick="download512()">Download icon.png (512x512)</button>
+        </div>
+    </div>
+
+    <script>
+        const svgString = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+            <rect width="512" height="512" fill="#2563eb" rx="64"/>
+            <g transform="translate(256 256) scale(8)">
+                <path d="M-35-30v60h10v-60h-10ZM-5-10v60h10v-60h-10Zm-40-20v20h10v-20h-10Zm60 20v60h10v-60h-10Zm20-20v20h10v-20h-10Z" fill="#ffffff"/>
+            </g>
+        </svg>`;
+
+        function drawIcon(canvas) {
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            const blob = new Blob([svgString], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);
+
+            img.onload = function() {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+            };
+
+            img.src = url;
+        }
+
+        function downloadCanvas(canvas, filename) {
+            canvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+        }
+
+        function download256() {
+            downloadCanvas(document.getElementById('canvas256'), 'icon.png');
+        }
+
+        function download512() {
+            downloadCanvas(document.getElementById('canvas512'), 'icon-512.png');
+        }
+
+        // Draw icons on page load
+        window.onload = function() {
+            drawIcon(document.getElementById('canvas256'));
+            drawIcon(document.getElementById('canvas512'));
+        };
+    </script>
+</body>
+</html>

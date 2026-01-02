@@ -23,7 +23,10 @@
       "Bash(git remote add:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(Remove-Item -Path \"$env:LOCALAPPDATA\\electron-builder\\Cache\\winCodeSign\" -Recurse -Force -ErrorAction SilentlyContinue)",
+      "Bash(find:*)",
+      "Bash(where:*)"
     ]
   }
 }
