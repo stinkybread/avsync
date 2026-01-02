@@ -6,74 +6,133 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 800px;
+            max-width: 900px;
             margin: 50px auto;
             padding: 20px;
+            background: #f9fafb;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
         canvas {
-            border: 1px solid #ccc;
+            border: 1px solid #e5e7eb;
             margin: 10px;
+            border-radius: 8px;
         }
         button {
             background: #2563eb;
             color: white;
             border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
+            padding: 12px 24px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 14px;
+            font-weight: 500;
             margin: 5px;
+            transition: all 0.2s;
         }
         button:hover {
             background: #1d4ed8;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         .preview {
             display: flex;
-            gap: 20px;
-            margin: 20px 0;
+            gap: 30px;
+            margin: 30px 0;
+            flex-wrap: wrap;
         }
-        h1 { color: #1f2937; }
+        .preview-item {
+            flex: 1;
+            min-width: 250px;
+        }
+        h1 {
+            color: #111827;
+            margin-bottom: 10px;
+        }
+        h3 {
+            color: #374151;
+            margin-bottom: 15px;
+        }
+        .subtitle {
+            color: #6b7280;
+            margin-bottom: 30px;
+        }
         .instruction {
-            background: #f3f4f6;
-            padding: 15px;
+            background: #f0f9ff;
+            border-left: 4px solid #2563eb;
+            padding: 20px;
             border-radius: 8px;
             margin: 20px 0;
+        }
+        .instruction strong {
+            color: #1e40af;
+            display: block;
+            margin-bottom: 10px;
+        }
+        .instruction ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instruction li {
+            margin: 8px 0;
+            color: #374151;
+        }
+        code {
+            background: #1f2937;
+            color: #f59e0b;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 13px;
         }
     </style>
 </head>
 <body>
-    <h1>AVSync Icon Generator</h1>
-    <p>This tool generates PNG icons for your Electron app from the SVG logo.</p>
+    <div class="container">
+        <h1>🎵 AVSync Icon Generator</h1>
+        <p class="subtitle">Generate PNG icons for your Electron app from the golden equalizer logo</p>
 
-    <div class="instruction">
-        <strong>Instructions:</strong>
-        <ol>
-            <li>Click the buttons below to download each icon size</li>
-            <li>Save them to the <code>resources/</code> folder with the exact names shown</li>
-            <li>The build process will automatically use these icons</li>
-        </ol>
-    </div>
-
-    <div class="preview">
-        <div>
-            <h3>256x256 (Windows Icon)</h3>
-            <canvas id="canvas256" width="256" height="256"></canvas>
-            <br>
-            <button onclick="download256()">Download icon.png (256x256)</button>
+        <div class="instruction">
+            <strong>📋 Instructions:</strong>
+            <ol>
+                <li>Preview the icons below to ensure they match your branding</li>
+                <li>Click the download buttons to save each icon size</li>
+                <li>Save <code>icon.png</code> to the <code>resources/</code> folder</li>
+                <li>Run <code>npm run package:win</code> to build your installer</li>
+            </ol>
         </div>
-        <div>
-            <h3>512x512 (macOS Icon)</h3>
-            <canvas id="canvas512" width="512" height="512"></canvas>
-            <br>
-            <button onclick="download512()">Download icon.png (512x512)</button>
+
+        <div class="preview">
+            <div class="preview-item">
+                <h3>256×256 (Windows Icon)</h3>
+                <canvas id="canvas256" width="256" height="256"></canvas>
+                <br>
+                <button onclick="download256()">⬇️ Download icon.png (256×256)</button>
+            </div>
+            <div class="preview-item">
+                <h3>512×512 (High Resolution)</h3>
+                <canvas id="canvas512" width="512" height="512"></canvas>
+                <br>
+                <button onclick="download512()">⬇️ Download icon-512.png (512×512)</button>
+            </div>
         </div>
     </div>
 
     <script>
+        // Golden equalizer icon with dark blue gradient background
         const svgString = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-            <rect width="512" height="512" fill="#2563eb" rx="64"/>
-            <g transform="translate(256 256) scale(8)">
-                <path d="M-35-30v60h10v-60h-10ZM-5-10v60h10v-60h-10Zm-40-20v20h10v-20h-10Zm60 20v60h10v-60h-10Zm20-20v20h10v-20h-10Z" fill="#ffffff"/>
+            <defs>
+                <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#1e3a8a;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#1e293b;stop-opacity:1" />
+                </linearGradient>
+            </defs>
+            <rect width="512" height="512" fill="url(#bg)" rx="80"/>
+            <g transform="translate(256 256) scale(3.5)">
+                <path d="M-80-60v120h26.67v-120h-26.67ZM-13.33-20v120h26.67v-120h-26.67Zm-106.67-40v40h26.67v-40h-26.67Zm160 40v120h26.67v-120h-26.67Zm53.33-40v40h26.67v-40h-26.67Z" fill="#f59e0b"/>
             </g>
         </svg>`;
 
