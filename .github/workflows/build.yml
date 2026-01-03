@@ -1,0 +1,144 @@
+name: Build AVSync Desktop
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download FFmpeg binaries (Windows)
+        run: |
+          mkdir -p resources/bin
+          # You'll need to add steps to download and extract binaries
+          # Or commit them to the repository (not recommended for large files)
+
+      - name: Build Python engine
+        run: |
+          python -m PyInstaller avsync.spec -y
+          Remove-Item -Path resources\avsync -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path dist\avsync -Destination resources\avsync -Recurse -Force
+
+      - name: Build Electron app
+        run: npm run build
+
+      - name: Package Windows installer
+        run: npm run package:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-installer
+          path: |
+            release/*.exe
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download FFmpeg binaries (macOS)
+        run: |
+          mkdir -p resources/bin
+          # Download and extract macOS binaries
+          # Example:
+          # curl -L https://ffbinaries.com/downloads -o ffmpeg.zip
+          # unzip ffmpeg.zip -d resources/bin/
+          # chmod +x resources/bin/ffmpeg resources/bin/ffprobe
+
+      - name: Build Python engine
+        run: |
+          python -m PyInstaller avsync.spec -y
+          rm -rf resources/avsync
+          cp -R dist/avsync resources/avsync
+
+      - name: Build Electron app
+        run: npm run build
+
+      - name: Package macOS app
+        run: npm run package:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-installer
+          path: |
+            release/*.dmg
+            release/*.zip
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: windows-installer
+          path: release-windows
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: macos-installer
+          path: release-macos
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release-windows/*
+            release-macos/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

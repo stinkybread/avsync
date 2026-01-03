@@ -1,6 +1,6 @@
 # Building AVSync Desktop for Distribution
 
-This guide explains how to create a fully installable Windows executable with all dependencies bundled.
+This guide explains how to create fully installable executables for Windows and macOS with all dependencies bundled.
 
 ## Prerequisites
 
@@ -153,6 +153,128 @@ Before distribution, test both versions:
 1. Copy `AVSync Desktop 1.0.0.exe` to a different location
 2. Run directly
 3. Test with sample videos
+
+---
+
+# Building for macOS
+
+## Prerequisites (macOS)
+
+1. **macOS computer** (required for proper .app and .dmg creation)
+2. **Xcode Command Line Tools**: `xcode-select --install`
+3. **Homebrew**: https://brew.sh
+4. **Node.js 18+**: `brew install node`
+5. **Python 3.8+**: `brew install python@3.11`
+
+## Build Process (macOS)
+
+### Step 1: Clone and Setup
+
+```bash
+git clone https://github.com/stinkybread/avsync.git
+cd avsync
+
+# Install dependencies
+npm install
+
+# Setup Python environment
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Step 2: Download macOS Binaries
+
+```bash
+mkdir -p resources/bin
+```
+
+**FFmpeg & FFprobe:**
+- Download from https://ffbinaries.com/downloads
+- Select macOS (darwin) platform
+- Extract `ffmpeg` and `ffprobe` to `resources/bin/`
+- Make executable: `chmod +x resources/bin/ffmpeg resources/bin/ffprobe`
+
+**MKVToolNix:**
+- Download from https://mkvtoolnix.download/
+- Extract `mkvmerge` and `mkvextract` to `resources/bin/`
+- Make executable: `chmod +x resources/bin/mkvmerge resources/bin/mkvextract`
+
+### Step 3: Build Python Engine
+
+```bash
+source venv/bin/activate
+python -m PyInstaller avsync.spec -y
+
+# Copy to resources
+rm -rf resources/avsync
+cp -R dist/avsync resources/avsync
+```
+
+### Step 4: Build and Package
+
+```bash
+npm run build
+npm run package:mac
+```
+
+### macOS Output Files
+
+```
+release/
+├── AVSync Desktop-1.0.0.dmg          # DMG installer (recommended)
+└── AVSync Desktop-1.0.0-mac.zip      # ZIP archive
+```
+
+**DMG Installer:**
+- Drag-and-drop installer
+- Professional appearance
+- Most common distribution format for macOS
+- File size: ~300-400 MB
+
+**ZIP Archive:**
+- Portable .app bundle
+- No installation required
+- Alternative distribution method
+
+---
+
+# GitHub Actions (Automated Builds)
+
+The easiest way to build for multiple platforms is to use GitHub Actions. I've created `.github/workflows/build.yml` which will:
+
+- Build Windows installer automatically
+- Build macOS DMG automatically
+- Create releases when you push a version tag
+
+## Using GitHub Actions
+
+1. **Push code to GitHub:**
+   ```bash
+   git push origin main
+   ```
+
+2. **Create a release tag:**
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+3. **GitHub Actions will:**
+   - Build on both Windows and macOS runners
+   - Create installers for both platforms
+   - Attach them to the GitHub release
+
+4. **Download installers:**
+   - Go to your repository's "Releases" page
+   - Download the installers for your platform
+
+**Note:** You'll need to update the workflow file to include binary downloads. The binaries are too large to commit to git, so you'll need to either:
+- Download them during the build process (recommended)
+- Host them elsewhere and download via curl/wget
+- Use a separate repository for binaries
+
+---
 
 ## Troubleshooting
 
