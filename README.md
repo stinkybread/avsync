@@ -59,10 +59,10 @@ python AVSync_v14.py ref.mkv foreign.mkv out.mkv \
 
 ### Batch (match by SxxExx episode code)
 
-`AVSync_batch_regex.py` pairs files across two folders by their `SxxExx` season/episode code (case-insensitive) rather than exact filename, then runs the engine on each pair. `--auto_detect` is injected automatically.
+`AVSync_batch.py` pairs files across two folders by their `SxxExx` season/episode code (case-insensitive) rather than exact filename, then runs the engine on each pair. `--auto_detect` is injected automatically.
 
 ```bash
-python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all
+python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all
 ```
 
 - Skips outputs that already exist unless `--overwrite` is given.
