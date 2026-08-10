@@ -112,6 +112,6 @@ Subtitles that fall outside the anchored segment range are dropped and logged in
 MIT — see [LICENSE](LICENSE).
 
 ## Credits
-
+**Shout-Outs** [NP-Gaming]((https://github.com/NP-Gaming)
 **Developer:** [Vaibhav Bhat](https://github.com/stinkybread)
 Built with FFmpeg, OpenCV, SciPy, and MKVToolNix.
