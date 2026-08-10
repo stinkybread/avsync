@@ -1,307 +1,117 @@
-# AVSync Desktop - Audio-Video Synchronization Tool
+# AVSync v14 — Audio/Video Synchronization Engine
 
-![Electron](https://img.shields.io/badge/Electron-29+-blue.svg)
-![React](https://img.shields.io/badge/React-18+-61dafb.svg)
-![TypeScript](https://img.shields.io/badge/TypeScript-5+-3178c6.svg)
 ![Python](https://img.shields.io/badge/Python-3.8+-yellow.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-A powerful desktop application for automatically synchronizing foreign audio tracks to reference videos. Built with Electron, React, and TypeScript, powered by the AVSync Python engine with advanced visual anchor detection and precise audio timing algorithms.
+A command-line tool that synchronizes a **foreign-language audio track** to a **reference video** using visual anchor detection and precise per-segment audio timing. It aligns dubbed audio (and subtitles) from one release to the exact timeline of another, then muxes a clean output that preserves all of the reference video's original content.
 
-![AVSync Night](https://github.com/stinkybread/avsync/blob/main/Main_Night.png) ![AvSync Day](https://github.com/stinkybread/avsync/blob/main/Main_Day.png)
+Typical use case: you have an English reference release with correct timing, and a foreign release (e.g. Japanese or French) whose audio you want retimed to match the reference video frame-for-frame.
 
-## ✨ Features
+## How It Works
 
-### Desktop Application
-- 🎨 **Modern UI**: Beautiful, intuitive interface with dark/light theme support
-- 📹 **Video Preview**: Frame-by-frame navigation with visual sync point definition
-- 🔄 **Batch Processing**: Process multiple videos with automatic file matching
-- 📊 **Job Queue**: Manage multiple processing jobs with real-time progress tracking
-- 💾 **Persistent Settings**: All parameters saved between sessions
-- 🎯 **Manual Sync Points**: Define precise synchronization points visually
-- 📝 **Real-time Logs**: Monitor processing with live log output
+1. **Image Pairing** — Scene-change frames are extracted from both videos with FFmpeg, then matched via OpenCV template matching (`TM_CCOEFF_NORMED`) to build a set of visual anchors linking the two timelines.
+2. **Audio Synchronization** — The foreign audio is split into segments defined by the anchors. Each segment is time-stretched (`atempo`) so its duration matches the corresponding reference segment, then concatenated and padded to align with the reference start.
+3. **Subtitle Synchronization** — Text subtitles are retimed with the same per-segment stretch as the audio. Bitmap subtitles are passed through unchanged (see below).
+4. **Muxing** — The reference video, its original audio, the synced foreign track(s), and subtitles are combined into the final file. On MKV, `mkvmerge` is used so all original streams, chapters, fonts, and metadata are preserved untouched.
 
-### Processing Engine
-- 🎯 **Visual Anchor Detection**: Scene change detection and template matching
-- 🔊 **Precise Audio Timing**: Iterative audio processing with millisecond-level precision
-- 🌍 **Multi-language Support**: Automatic audio stream detection by language codes
-- 📊 **Quality Control**: Generate side-by-side comparison images and CSV reports
-- ⚡ **Parallel Processing**: Multi-threaded frame matching for faster processing
-- 🎛️ **Flexible Configuration**: Extensive customization options
-- 💾 **Smart Caching**: Cache visual anchors for faster re-processing
+## What's New in v14
 
-## 🎬 How It Works
+- **Anchor-and-follow frame matching.** The first frame is located with a wide search window (±6% of reference duration) to establish an anchor. Every subsequent frame is then searched only in a narrow window **0 to +10 seconds forward** of its estimated position (derived from the anchor offset). Combined with a foreign-frame cache and lower match resolution, this is dramatically faster than the previous fixed-window scan.
+- **Lower template-match resolution (640×360).** Frames are compared at half the previous resolution. Whole-frame scene matching is unaffected in accuracy but much faster.
+- **Native ASS/SSA subtitle preservation.** Styled subtitles keep their fonts, colors, positioning, and inline tags. Only `Dialogue:` timestamps are adjusted; the entire header, styles, and any `[Fonts]` sections are preserved verbatim. Non-ASS text subs are handled as SRT.
+- **Bitmap subtitle pass-through (PGS / VobSub).** Image-based subtitles (`hdmv_pgs_subtitle`, `dvd_subtitle`, etc.) cannot be text-parsed or retimed. They are now copied through into the output unchanged, with a clear log warning that their timing matches the foreign source rather than the adjusted audio.
+- **Visible dropped-subtitle logging.** Any subtitle falling outside the anchored segment range is logged individually — with its index, timestamps, a text preview, and the specific reason (before the first boundary, after the last, or in a gap) — instead of being silently discarded.
 
-1. **Image Pairing Stage**: Extracts scene change frames and matches them between reference and foreign videos
-2. **Audio Synchronization Stage**: Processes audio segments iteratively to match reference timing precisely
-3. **Muxing Stage**: Combines reference video, original audio, and synchronized foreign audio into final output
+### Maintenance / Bugfixes (post-v14 QC)
 
-## 📋 Requirements
+- Fixed broken stage-header log messages (control-character placeholders).
+- Fixed ffmpeg concat demuxer path resolution (absolute paths are now used so processing no longer depends on the process working directory).
+- Cache checkpoint version bumped to 14 for compatibility.
+- Batch script: fixed a copy-paste bug that prevented detection of an empty foreign directory; improved episode-code matching diagnostics; the main engine is now located relative to the batch script itself.
 
-### System Dependencies
-- **Node.js** 18+ and npm (for building the desktop app)
-- **Python** 3.8+ with pip
-- **FFmpeg** (full build with SoxR support)
-- **FFprobe**
-- **MKVToolNix** (mkvmerge, mkvextract)
+## Requirements
 
-## 🚀 Installation
+- **Python** 3.8+
+- **FFmpeg** and **FFprobe** (full build with SoxR recommended for high-quality resampling)
+- **MKVToolNix** (`mkvmerge`) for MKV muxing
+- Python packages: see `requirements.txt` (OpenCV, NumPy, SciPy, tqdm; optional `imagehash` + `Pillow` for similarity filtering)
 
-### 1. Clone the Repository
 ```bash
-git clone https://github.com/stinkybread/avsync.git
-cd avsync
-```
-
-### 2. Install Node Dependencies
-```bash
-npm install
-```
-
-### 3. Setup Python Environment
-```bash
-# Create virtual environment (recommended)
-python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
-# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-### 4. Download External Binaries
+FFmpeg full builds: https://ffbinaries.com/downloads · MKVToolNix: https://mkvtoolnix.download/
 
-Download FFmpeg (full build with SoxR) and MKVToolNix binaries and place them in `resources/bin/`:
+## Usage
 
-**FFmpeg (Recommended):**
-- Download from: https://ffbinaries.com/downloads
-- Get the latest FFmpeg build for your platform
-- Extract and copy `ffmpeg.exe` and `ffprobe.exe` to `resources/bin/`
+### Single pair
 
-**MKVToolNix:**
-- Download from: https://mkvtoolnix.download/
-- Copy `mkvmerge.exe` and `mkvextract.exe` to `resources/bin/`
-
-Your `resources/bin/` folder should contain:
-```
-resources/bin/
-├── ffmpeg.exe
-├── ffprobe.exe
-├── mkvmerge.exe
-└── mkvextract.exe
-```
-
-### 5. Build Python Engine
 ```bash
-# Activate venv if not already active
-# Build AVSync executable with PyInstaller
-python -m PyInstaller avsync.spec -y
-
-# Copy built executable to resources
-# Windows PowerShell:
-Remove-Item -Path resources\avsync -Recurse -Force
-Copy-Item -Path dist\avsync -Destination resources\avsync -Recurse -Force
+python AVSync_v14.py "reference.mkv" "foreign.mkv" "output.mkv"
 ```
 
-### 6. Build Desktop Application
+You'll be prompted to pick reference and foreign audio streams. Pass `--auto_detect` to skip the prompts and select streams by language automatically.
+
 ```bash
-npm run build
+python AVSync_v14.py ref.mkv foreign.mkv out.mkv \
+    --ref_lang eng --foreign_lang jpn --auto_detect
 ```
 
-## 🎮 Usage
+### Batch (match by SxxExx episode code)
 
-### Development Mode
+`AVSync_batch_regex.py` pairs files across two folders by their `SxxExx` season/episode code (case-insensitive) rather than exact filename, then runs the engine on each pair. `--auto_detect` is injected automatically.
+
 ```bash
-npm run dev
-```
-This starts the Vite dev server and launches Electron in development mode with hot reload.
-
-### Production Build
-```bash
-npm run build
-npm run electron
+python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all
 ```
 
-### Creating Distributable Package
-```bash
-npm run package
-```
-This creates a distributable application in the `release` folder.
+- Skips outputs that already exist unless `--overwrite` is given.
+- All arguments after the three folders are passed straight through to `AVSync_v14.py`.
+- A valid `--foreign_lang` is required in batch mode (the engine needs it for metadata tagging).
 
-## 💡 Application Guide
+## Key Options
 
-### New Job Tab
-- Select reference video (the video with correct timing)
-- Select foreign video (the video with audio to sync)
-- Choose output location
-- Adjust parameters as needed
-- Add manual sync points if desired (optional)
-- Click "Add to Queue"
+| Option | Default | Description |
+|---|---|---|
+| `--ref_lang` / `--foreign_lang` | `eng` / `foreign` | ISO 639-2 language codes (e.g. `eng`, `jpn`, `fre`, `hin`) |
+| `--auto_detect` | off | Skip interactive prompts; select streams by language |
+| `--foreign_tracks` | primary | `primary`, `all`, or comma-separated stream indices to sync |
+| `--scene_threshold` | `0.25` | Scene-change sensitivity for frame extraction (0.0–1.0) |
+| `--match_threshold` | `0.7` | Template-match acceptance threshold (0.0–1.0) |
+| `--similarity_threshold` | `4` | Perceptual-hash dedup distance (`-1` to disable) |
+| `--db_threshold` | `-40.0` | Audio content detection threshold in dB |
+| `--min_segment_duration` | `5.0` | Minimum reference segment length in seconds |
+| `--first_segment_adjust` / `--last_segment_adjust` | `0.0` | Manual timing nudge in **milliseconds** for the first/last segment |
+| `--force_sync_points` | none | Manual anchor points for problem sections |
+| `--mux_foreign_codec` / `--mux_foreign_bitrate` | `aac` / `192k` | Output codec/bitrate for synced foreign audio |
+| `--no_subtitles` | off | Skip subtitle handling entirely |
+| `--qc_output_dir` | none | Write side-by-side QC comparison images |
+| `--output_csv` | none | Write an anchor/segment report |
+| `--verbose` | off | Show DEBUG-level detail |
 
-### Batch Tab
-- Select folders containing reference and foreign videos
-- Configure file matching patterns
-- Review matched files in the staging table
-- Adjust per-job settings if needed
-- Add all to queue
+## Subtitle Behavior at a Glance
 
-### Queue Tab
-- View all queued jobs
-- Start processing
-- Monitor real-time progress and logs
-- Abort, retry, or remove jobs as needed
+| Source format | Handling | Timing adjusted? |
+|---|---|---|
+| SRT / SubRip | Parsed, retimed, written as SRT | Yes |
+| ASS / SSA | Parsed natively, styles preserved, retimed | Yes (timestamps only) |
+| PGS (`hdmv_pgs_subtitle`) | Passed through unchanged | No — matches foreign source |
+| VobSub (`dvd_subtitle`) | Passed through unchanged | No — matches foreign source |
 
-### Parameters
+Subtitles that fall outside the anchored segment range are dropped and logged individually with a reason.
 
-#### Image Pairing
-- **Scene Threshold**: Scene change detection sensitivity (0.0-1.0, default: 0.25)
-- **Match Threshold**: Template matching threshold (0.0-1.0, default: 0.7)
-- **Similarity Threshold**: Perceptual hash difference (default: 4, -1 to disable)
+## Tips for Best Results
 
-#### Audio Processing
-- **Reference Language**: Language code for reference audio (default: eng)
-- **Foreign Language**: Language code for foreign audio (default: spa)
-- **dB Threshold**: Audio detection threshold (default: -40.0 dB)
-- **Min Segment Duration**: Minimum segment length (default: 0.5s)
-- **Auto-detect**: Automatically detect audio streams
+- Both videos should contain essentially the same scenes. Different intros, ads, or missing scenes will reduce anchor quality.
+- If no matches are found, lower `--scene_threshold` (e.g. `0.15`) and/or `--match_threshold` (e.g. `0.6`).
+- Uniform, clear scene changes give the most reliable anchors.
+- Use `--force_sync_points` for sections that consistently misalign.
 
-#### Muxing
-- **Foreign Audio Codec**: Output codec (default: aac)
-- **Foreign Audio Bitrate**: Output bitrate (default: 192k)
+## License
 
-#### Advanced
-- **Use Cache**: Cache visual anchors for faster re-processing
-- **Skip Subtitles**: Don't include subtitles in output
+MIT — see [LICENSE](LICENSE).
 
-## 🔧 Project Structure
-
-```
-avsync/
-├── electron/           # Electron main and preload scripts
-├── src/               # React frontend source
-│   ├── components/    # React components
-│   ├── App.tsx       # Main application component
-│   └── main.tsx      # React entry point
-├── resources/        # Application resources
-│   ├── bin/         # External binaries (FFmpeg, etc.)
-│   └── avsync/      # PyInstaller bundle
-├── AVSync_v12.py    # Python processing engine
-├── avsync.spec      # PyInstaller specification
-└── package.json     # Node.js dependencies
-```
-
-## 🎯 Tips for Best Results
-
-### Video Content
-- ✅ Use videos with clear scene changes and visual landmarks
-- ✅ Ensure good video quality for accurate frame matching
-- ✅ Both videos should be essentially the same (same scenes, different audio)
-- ❌ Avoid videos with different intros, extra ads, or missing scenes
-
-### Audio Content
-- ✅ Ensure clear content boundaries in audio tracks
-- ✅ Use similar audio quality between reference and foreign tracks
-- ✅ Define manual sync points for problematic sections
-
-### Parameter Tuning
-- **Lower scene threshold**: Detects more frames (more anchor points)
-- **Higher match threshold**: Stricter frame matching (fewer false positives)
-- **Longer min segment duration**: Fewer, longer segments (more stable sync)
-
-## 🐛 Troubleshooting
-
-### "FFmpeg/FFprobe not found"
-- Ensure binaries are in `resources/bin/`
-- Rebuild PyInstaller bundle: `python -m PyInstaller avsync.spec -y`
-- Copy to resources: See Installation step 5
-
-### "No matches found"
-- Try lowering scene threshold (e.g., 0.15)
-- Try lowering match threshold (e.g., 0.6)
-- Verify videos actually correspond to each other
-- Add manual sync points
-
-### "SoxR resampler unavailable"
-- Download FFmpeg **full build** (not essentials)
-- Use builds from https://ffbinaries.com/downloads
-
-### Build Errors
-```bash
-# Clean and rebuild
-rm -rf node_modules dist dist-electron build
-npm install
-npm run build
-```
-
-## 🏗️ Development
-
-### Prerequisites
-- Node.js 18+
-- Python 3.8+
-- Git
-
-### Setup Development Environment
-```bash
-# Clone and install
-git clone https://github.com/stinkybread/avsync.git
-cd avsync
-npm install
-
-# Setup Python
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install -r requirements.txt
-
-# Download binaries (see Installation step 4)
-
-# Build Python engine
-python -m PyInstaller avsync.spec -y
-# Copy dist/avsync to resources/avsync
-
-# Run in dev mode
-npm run dev
-```
-
-### Tech Stack
-- **Frontend**: React 18, TypeScript, Vite
-- **Desktop**: Electron 29
-- **Processing**: Python 3.8+, OpenCV, SciPy, NumPy
-- **Bundling**: PyInstaller, electron-builder
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Credits
-
-**Developer**: [Vaibhav Bhat](https://github.com/stinkybread)
-
-**UI Design & Implementation**: Claude (Anthropic)
-
-**Special Thanks**:
-- FFmpeg team for the multimedia framework
-- OpenCV community for computer vision tools
-- SciPy contributors for audio processing capabilities
-- Electron and React teams
-
-## 📞 Support
-
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/stinkybread/avsync/issues)
-- 💡 **Feature Requests**: [GitHub Discussions](https://github.com/stinkybread/avsync/discussions)
-
----
-
-**Made with ❤️ by Vaibhav Bhat**
+## Credits
+**Shout-Outs** [NP-Gaming]((https://github.com/NP-Gaming)
+**Developer:** [Vaibhav Bhat](https://github.com/stinkybread)
+Built with FFmpeg, OpenCV, SciPy, and MKVToolNix.

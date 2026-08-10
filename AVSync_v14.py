@@ -260,7 +260,7 @@ def get_cache_path(args):
 def save_checkpoint(cache_path, visual_anchors_details):
     """Save checkpoint data to disk"""
     checkpoint_data = {
-        'version': 12,
+        'version': 14,
         'visual_anchors_details': visual_anchors_details,
         'timestamp': time.time()
     }
@@ -284,7 +284,7 @@ def load_checkpoint(cache_path):
         with open(cache_path, 'rb') as f:
             checkpoint_data = pickle.load(f)
         
-        if checkpoint_data.get('version') != 12:
+        if checkpoint_data.get('version') != 14:
             logger.warning(f"[CACHE] Version mismatch, ignoring cache")
             return None
             
@@ -435,13 +435,13 @@ try:
     import imagehash
     from PIL import Image
     similarity_libs_available = True
-except ImportError as e:
-    print(f"Warning: 'imagehash' or 'Pillow' not found. Similarity filtering will be skipped. Error: {e}")
+except ImportError:
+    print("Warning: 'imagehash' or 'Pillow' not found. Similarity filtering will be skipped.")
     similarity_libs_available = False
 
 # --- Constants ---
-RESIZE_WIDTH = 1280
-RESIZE_HEIGHT = 720
+RESIZE_WIDTH = 640
+RESIZE_HEIGHT = 360
 DEFAULT_DB_THRESHOLD = -40.0
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_CHANNELS = 2
@@ -458,7 +458,9 @@ DEFAULT_MUX_ABITRATE = "192k"
 QC_IMAGE_HEIGHT = 720
 FFMPEG_EXEC = None
 FFPROBE_EXEC = None
-MATCH_WINDOW_PERCENT = 0.06 # Percentage of ref video duration for match search window
+MKVMERGE_EXEC = None
+MATCH_WINDOW_PERCENT = 0.06 # Percentage of ref video duration for INITIAL anchor search window
+ANCHOR_FOLLOW_FORWARD_WINDOW_S = 10.0 # Seconds forward from estimated position for subsequent matches
 
 # Logger will be initialized in main() with proper file output
 # Use a temporary logger for early errors
@@ -471,26 +473,13 @@ if not logger.handlers:
 
 # --- Utility & FFmpeg/FFprobe Functions ---
 def find_executable(name):
-    """Finds an executable in bundled resources first, then system PATH."""
-    # Check if running as PyInstaller bundle
-    if getattr(sys, 'frozen', False):
-        # Running in a PyInstaller bundle
-        # sys._MEIPASS points to the temporary extraction directory at runtime
-        bundle_dir = sys._MEIPASS
-        ext = '.exe' if platform.system() == 'Windows' else ''
-        # In PyInstaller COLLECT mode, binaries are directly in the extraction directory
-        bundled_path = os.path.join(bundle_dir, 'bin', f'{name}{ext}')
-        if os.path.exists(bundled_path):
-            logger.debug(f"Found bundled executable '{name}' at: {bundled_path}")
-            return bundled_path
-
-    # Fall back to system PATH
+    """Finds an executable in the system PATH."""
     exec_path = shutil.which(name)
     if exec_path:
         logger.debug(f"Found executable '{name}' at: {exec_path}")
         return exec_path
     else:
-        logger.error(f"'{name}' command not found in bundled resources or system PATH.")
+        logger.error(f"'{name}' command not found in system PATH.")
         return None
 
 def run_ffmpeg(cmd_list, desc="FFmpeg Task", verbose_success=False, capture_stderr=False):
@@ -538,6 +527,113 @@ def run_ffmpeg(cmd_list, desc="FFmpeg Task", verbose_success=False, capture_stde
     except Exception as e:
         logger.error(f"ERROR: Unexpected error running {desc}: {e}", exc_info=True)
         return False, "" if capture_stderr else False
+
+# --- ISO 639-2 Language Code Validation ---
+# Common 3-letter ISO 639-2/B codes for validation reference
+COMMON_LANG_CODES = {
+    'aar', 'abk', 'afr', 'aka', 'amh', 'ara', 'arg', 'asm', 'ava', 'ave',
+    'aym', 'aze', 'bak', 'bam', 'bel', 'ben', 'bih', 'bis', 'bod', 'bos',
+    'bre', 'bul', 'cat', 'ces', 'cha', 'che', 'chi', 'chu', 'chv', 'cor',
+    'cos', 'cre', 'cym', 'dan', 'deu', 'div', 'dzo', 'ell', 'eng', 'epo',
+    'est', 'eus', 'ewe', 'fao', 'fas', 'fij', 'fin', 'fra', 'fre', 'fry',
+    'ful', 'gla', 'gle', 'glg', 'glv', 'ger', 'grn', 'guj', 'hat', 'hau',
+    'hbs', 'heb', 'her', 'hin', 'hmo', 'hrv', 'hun', 'hye', 'ibo', 'ido',
+    'iii', 'iku', 'ile', 'ina', 'ind', 'ipk', 'isl', 'ita', 'jav', 'jpn',
+    'kal', 'kan', 'kas', 'kat', 'kau', 'kaz', 'khm', 'kik', 'kin', 'kir',
+    'kor', 'kua', 'kur', 'lao', 'lat', 'lav', 'lim', 'lin', 'lit', 'ltz',
+    'lub', 'lug', 'mac', 'mah', 'mal', 'mar', 'mkd', 'mlg', 'mlt', 'mon',
+    'mri', 'msa', 'may', 'mya', 'nau', 'nav', 'nbl', 'nde', 'ndo', 'nep',
+    'nld', 'dut', 'nno', 'nob', 'nor', 'nya', 'oci', 'oji', 'ori', 'orm',
+    'oss', 'pan', 'pli', 'pol', 'por', 'pus', 'que', 'roh', 'ron', 'rum',
+    'run', 'rus', 'sag', 'san', 'sin', 'slk', 'slo', 'slv', 'sme', 'smo',
+    'sna', 'snd', 'som', 'sot', 'spa', 'sqi', 'alb', 'srd', 'srp', 'ssw',
+    'sun', 'swa', 'swe', 'tah', 'tam', 'tat', 'tel', 'tgk', 'tgl', 'tha',
+    'tir', 'ton', 'tsn', 'tso', 'tuk', 'tur', 'twi', 'uig', 'ukr', 'und',
+    'urd', 'uzb', 'ven', 'vie', 'vol', 'wln', 'wol', 'xho', 'yid', 'yor',
+    'zha', 'zho', 'zul',
+}
+
+
+def validate_language_code(lang_code):
+    """
+    Validate a 3-letter ISO 639-2 language code.
+    Returns True if it looks valid (3 lowercase letters).
+    """
+    if not lang_code or not isinstance(lang_code, str):
+        return False
+    lang_code = lang_code.strip().lower()
+    if len(lang_code) != 3 or not lang_code.isalpha():
+        return False
+    return True
+
+
+def prompt_for_language_code(stream_type="foreign"):
+    """
+    Prompt user to enter a valid 3-letter ISO 639-2 language code.
+    Returns the validated code or None if user cancels.
+    """
+    print(f"\n  A valid 3-letter language code is required for the {stream_type} audio track.")
+    print(f"  Common codes: eng (English), hin (Hindi), jpn (Japanese), spa (Spanish),")
+    print(f"                fra (French), deu (German), ita (Italian), por (Portuguese),")
+    print(f"                kor (Korean), zho (Chinese), ara (Arabic), rus (Russian)")
+    
+    while True:
+        try:
+            user_input = input(f"  Enter 3-letter language code for {stream_type} audio (or 'q' to quit): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        
+        if user_input == 'q':
+            return None
+        
+        if validate_language_code(user_input):
+            if user_input in COMMON_LANG_CODES:
+                print(f"  -> Using language code: {user_input}")
+            else:
+                print(f"  -> Using language code: {user_input} (not in common list, but accepted)")
+            return user_input
+        else:
+            print(f"  -> Invalid code '{user_input}'. Must be exactly 3 letters (e.g., 'hin', 'eng', 'jpn').")
+
+
+def run_mkvmerge(cmd_list, desc="MKVMerge Task"):
+    """Runs an mkvmerge command with logging and error handling."""
+    global MKVMERGE_EXEC
+    if not MKVMERGE_EXEC:
+        logger.error("mkvmerge path not set.")
+        return False
+    cmd_list[0] = MKVMERGE_EXEC
+    logger.info(f"  -> Running: {desc}...")
+    start_time = time.time()
+    try:
+        process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, encoding='utf-8', errors='ignore')
+        stdout, stderr = process.communicate()
+        elapsed_time = time.time() - start_time
+
+        # mkvmerge exit codes: 0=success, 1=warnings, 2=error
+        if process.returncode >= 2:
+            logger.error(f"\nERROR: {desc} failed! (Exit code: {process.returncode}, Time: {elapsed_time:.2f}s)")
+            logger.error(f"  mkvmerge Command: {' '.join(cmd_list)}")
+            output_lines = (stdout + stderr).strip().splitlines()
+            max_lines = 20
+            log_output = "\n".join(output_lines[-max_lines:])
+            if len(output_lines) > max_lines:
+                log_output = f"(Showing last {max_lines} lines)\n" + log_output
+            logger.error(f"  mkvmerge Output:\n{log_output}")
+            return False
+        else:
+            if process.returncode == 1:
+                logger.warning(f"  mkvmerge completed with warnings for {desc}")
+            logger.info(f"  -> Completed: {desc} (Time: {elapsed_time:.2f}s)")
+            return True
+    except FileNotFoundError:
+        logger.error(f"'{cmd_list[0]}' not found. Check installation/PATH.")
+        return False
+    except Exception as e:
+        logger.error(f"ERROR: Unexpected error running {desc}: {e}", exc_info=True)
+        return False
+
 
 def get_stream_info(video_path):
     """Gets stream information using ffprobe."""
@@ -655,6 +751,335 @@ def prompt_user_for_audio_stream(video_path, stream_type="foreign"):
                 continue
         except ValueError:
             print("Error: Please enter a valid number.")
+
+
+def prompt_user_for_foreign_tracks(video_path, primary_stream_idx=None):
+    """
+    Prompts the user to select which audio tracks from the foreign video to include.
+    Returns a list of dicts: [{'stream_idx': int, 'language': str}, ...]
+    The primary track is always first in the returned list.
+    """
+    audio_streams = get_audio_stream_details(video_path)
+    if not audio_streams:
+        logger.error(f"No audio streams found in {os.path.basename(video_path)}")
+        return []
+
+    if len(audio_streams) == 1:
+        # Only one track, no need to prompt
+        track = audio_streams[0]
+        lang = track['language'] if track['language'] != 'und' else None
+        return [{'stream_idx': track['index'], 'language': lang}]
+
+    print(f"\n--- Foreign Audio Track Selection ---")
+    print(f"  File: {os.path.basename(video_path)}")
+    print(f"  {len(audio_streams)} audio track(s) available:\n")
+    print("  {:<5} {:<10} {:<8} {:<12} {:<10} {:<15} {}".format(
+        "Sel#", "Stream#", "Lang", "Codec", "Channels", "Sample Rate", "Title"))
+    print("  " + "-" * 85)
+
+    for i, stream in enumerate(audio_streams):
+        primary_marker = " <-- Primary" if stream['index'] == primary_stream_idx else ""
+        print("  {:<5} {:<10} {:<8} {:<12} {:<10} {:<15} {}{}".format(
+            i,
+            stream['index'],
+            stream['language'],
+            stream['codec'],
+            stream['channels'],
+            stream['sample_rate'],
+            stream.get('title', ''),
+            primary_marker))
+
+    print(f"\n  Options:")
+    print(f"    Enter Sel# for a single track (e.g., '0')")
+    print(f"    Enter comma-separated Sel# for multiple tracks (e.g., '0,1,2')")
+    print(f"    Enter 'all' to include all tracks")
+    print(f"    Press Enter to use only the primary track")
+
+    while True:
+        try:
+            selection = input(f"\n  Select foreign audio tracks to sync and include: ").strip().lower()
+
+            if not selection:
+                # Default: just the primary track
+                if primary_stream_idx is not None:
+                    for s in audio_streams:
+                        if s['index'] == primary_stream_idx:
+                            return [{'stream_idx': s['index'], 'language': s['language'] if s['language'] != 'und' else None}]
+                # If no primary specified, return first track
+                return [{'stream_idx': audio_streams[0]['index'], 'language': audio_streams[0]['language'] if audio_streams[0]['language'] != 'und' else None}]
+
+            if selection == 'all':
+                selected = []
+                for s in audio_streams:
+                    selected.append({'stream_idx': s['index'], 'language': s['language'] if s['language'] != 'und' else None})
+                # Put primary first if specified
+                if primary_stream_idx is not None:
+                    selected.sort(key=lambda x: 0 if x['stream_idx'] == primary_stream_idx else 1)
+                return selected
+
+            # Parse comma-separated indices
+            parts = [p.strip() for p in selection.split(',')]
+            selected = []
+            valid = True
+            for p in parts:
+                try:
+                    idx = int(p)
+                    if 0 <= idx < len(audio_streams):
+                        s = audio_streams[idx]
+                        selected.append({'stream_idx': s['index'], 'language': s['language'] if s['language'] != 'und' else None})
+                    else:
+                        print(f"  Error: Sel# {idx} out of range (0-{len(audio_streams)-1})")
+                        valid = False
+                        break
+                except ValueError:
+                    print(f"  Error: '{p}' is not a valid number")
+                    valid = False
+                    break
+
+            if valid and selected:
+                # Put primary first if specified
+                if primary_stream_idx is not None:
+                    selected.sort(key=lambda x: 0 if x['stream_idx'] == primary_stream_idx else 1)
+                return selected
+
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Cancelled.")
+            return []
+
+
+def resolve_track_languages(track_list, auto_detect=False):
+    """
+    Ensure all tracks in the list have valid language codes.
+    Prompts user interactively for any track with missing/invalid language.
+    In auto_detect mode, invalid languages cause an error.
+    
+    Args:
+        track_list: list of {'stream_idx': int, 'language': str or None, ...}
+        auto_detect: if True, don't prompt (error on invalid)
+    
+    Returns:
+        True if all languages resolved, False if user cancelled or auto_detect failed
+    """
+    for i, track in enumerate(track_list):
+        lang = track.get('language')
+        if not lang or not validate_language_code(lang) or lang.lower() in ('und', 'unk', 'foreign'):
+            if auto_detect:
+                logger.error(f"Track stream #{track['stream_idx']}: invalid language '{lang}'. "
+                           f"Specify valid language codes via --foreign_lang or per-track metadata.")
+                return False
+            else:
+                print(f"\n  Track stream #{track['stream_idx']} has no valid language tag (current: '{lang or 'none'}')")
+                new_lang = prompt_for_language_code(f"track #{track['stream_idx']}")
+                if new_lang is None:
+                    return False
+                track['language'] = new_lang
+    return True
+
+
+def parse_foreign_tracks_arg(foreign_tracks_str, video_path, primary_stream_idx=None):
+    """
+    Parse --foreign_tracks argument into a track list.
+    
+    Args:
+        foreign_tracks_str: "all", "primary", or comma-separated absolute stream indices
+        video_path: path to foreign video for stream discovery
+        primary_stream_idx: the primary foreign stream index (already selected)
+    
+    Returns:
+        list of {'stream_idx': int, 'language': str or None}
+    """
+    audio_streams = get_audio_stream_details(video_path)
+    if not audio_streams:
+        return []
+
+    if foreign_tracks_str.lower() == 'primary':
+        # Just the primary track
+        if primary_stream_idx is not None:
+            for s in audio_streams:
+                if s['index'] == primary_stream_idx:
+                    return [{'stream_idx': s['index'], 'language': s['language'] if s['language'] != 'und' else None}]
+        return [{'stream_idx': audio_streams[0]['index'], 'language': audio_streams[0]['language'] if audio_streams[0]['language'] != 'und' else None}]
+
+    if foreign_tracks_str.lower() == 'all':
+        selected = []
+        for s in audio_streams:
+            selected.append({'stream_idx': s['index'], 'language': s['language'] if s['language'] != 'und' else None})
+        if primary_stream_idx is not None:
+            selected.sort(key=lambda x: 0 if x['stream_idx'] == primary_stream_idx else 1)
+        return selected
+
+    # Parse comma-separated absolute stream indices
+    selected = []
+    stream_idx_map = {s['index']: s for s in audio_streams}
+    parts = [p.strip() for p in foreign_tracks_str.split(',')]
+    for p in parts:
+        try:
+            idx = int(p)
+            if idx in stream_idx_map:
+                s = stream_idx_map[idx]
+                selected.append({'stream_idx': s['index'], 'language': s['language'] if s['language'] != 'und' else None})
+            else:
+                logger.warning(f"Stream index {idx} not found as audio stream in foreign video. Skipping.")
+        except ValueError:
+            logger.warning(f"Invalid stream index '{p}' in --foreign_tracks. Skipping.")
+
+    if primary_stream_idx is not None:
+        selected.sort(key=lambda x: 0 if x['stream_idx'] == primary_stream_idx else 1)
+    return selected
+
+
+def sync_additional_track(foreign_video, stream_idx, final_segment_anchors, ref_delay_s,
+                          temp_dir, track_label="additional"):
+    """
+    Sync an additional foreign audio track using pre-computed segment anchors.
+    
+    This reuses the timing from the primary track's sync without re-doing 
+    iterative refinement. Since all audio tracks in the same video share 
+    the same timeline, the same anchor points apply.
+    
+    Args:
+        foreign_video: path to the foreign video file
+        stream_idx: absolute stream index of the additional track
+        final_segment_anchors: list of (ref_time, foreign_time) tuples from primary sync
+        ref_delay_s: reference delay for start padding
+        temp_dir: temporary directory for intermediate files
+        track_label: label for logging
+    
+    Returns:
+        str: path to the synced WAV file, or None on failure
+    """
+    logger.info(f"\n--- Syncing Additional Track: Stream #{stream_idx} ({track_label}) ---")
+    
+    num_segments = len(final_segment_anchors) - 1
+    if num_segments < 1:
+        logger.error(f"  No segments to process for additional track #{stream_idx}")
+        return None
+    
+    # Create a subdirectory for this track's temp files
+    track_temp_dir = os.path.join(temp_dir, f"additional_track_{stream_idx}")
+    os.makedirs(track_temp_dir, exist_ok=True)
+    
+    # Step 1: Extract the additional track to WAV
+    foreign_wav_full = os.path.join(track_temp_dir, f"foreign_full_{stream_idx}.wav")
+    aresample_filter = f'aresample=resampler=soxr:precision=28:cutoff={0.99 if DEFAULT_SAMPLE_RATE >= 44100 else 0.90}'
+    
+    extract_cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats",
+        "-i", foreign_video,
+        "-map", f"0:{stream_idx}",
+        "-vn",
+        "-c:a", "pcm_s16le", "-ar", str(DEFAULT_SAMPLE_RATE), "-ac", str(DEFAULT_CHANNELS),
+        "-af", aresample_filter, "-y", "-f", "wav", foreign_wav_full
+    ]
+    if not run_ffmpeg(extract_cmd, f"Extract Additional Track #{stream_idx}")[0]:
+        return None
+    
+    # Step 2: Process each segment using the same anchors
+    processed_segment_files = []
+    
+    pbar = tqdm(
+        total=num_segments,
+        desc=f"Track #{stream_idx}",
+        unit="seg",
+        ncols=80,
+        bar_format='{desc}: {bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+        file=sys.stdout,
+        dynamic_ncols=False
+    )
+    
+    for i in range(num_segments):
+        segment_num = i + 1
+        ref_start, foreign_start = final_segment_anchors[i]
+        ref_end, foreign_end = final_segment_anchors[i + 1]
+        target_ref_duration = ref_end - ref_start
+        
+        # Use the same iterative processing as the primary track
+        # (no first/last segment adjustments for additional tracks)
+        segment_path = process_segment_iteratively(
+            foreign_wav_full=foreign_wav_full,
+            foreign_start=foreign_start,
+            foreign_end=foreign_end,
+            ref_duration=target_ref_duration,
+            segment_num=segment_num,
+            temp_dir=track_temp_dir,
+            max_iterations=3,
+            target_precision_ms=5,
+            is_first_segment=False,
+            is_last_segment=False,
+            first_adjust_ms=0.0,
+            last_adjust_ms=0.0
+        )
+        
+        if segment_path and os.path.exists(segment_path):
+            processed_segment_files.append(segment_path)
+        else:
+            pbar.close()
+            logger.error(f"  Failed to process segment {segment_num} for track #{stream_idx}")
+            return None
+        
+        pbar.update(1)
+    
+    pbar.close()
+    
+    if not processed_segment_files:
+        logger.error(f"  No segments processed for track #{stream_idx}")
+        return None
+    
+    logger.info(f"  [OK] Processed {len(processed_segment_files)} segments for track #{stream_idx}")
+    
+    # Step 3: Concatenate segments
+    concatenated_path = os.path.join(track_temp_dir, "concatenated.wav")
+    concat_list_path = os.path.join(track_temp_dir, "concat_list.txt")
+    
+    try:
+        with open(concat_list_path, 'w', encoding='utf-8') as f:
+            for seg_path in processed_segment_files:
+                # Absolute path required: concat demuxer resolves relative to process CWD, not list location
+                abs_path = os.path.abspath(seg_path).replace("\\", "/")
+                f.write(f"file '{abs_path}'\n")
+    except IOError as e:
+        logger.error(f"  Failed to create concat list for track #{stream_idx}: {e}")
+        return None
+    
+    concat_cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats",
+        "-f", "concat", "-safe", "0",
+        "-i", concat_list_path,
+        "-c", "copy",
+        "-y", concatenated_path
+    ]
+    if not run_ffmpeg(concat_cmd, f"Concatenate Track #{stream_idx}")[0]:
+        return None
+    
+    # Step 4: Apply start delay padding
+    output_wav = os.path.join(track_temp_dir, f"synced_track_{stream_idx}.wav")
+    
+    if ref_delay_s >= MIN_DELAY_S:
+        delay_ms = int(ref_delay_s * 1000)
+        pad_cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostats",
+            "-i", concatenated_path,
+            "-af", f"adelay={delay_ms}|{delay_ms}",
+            "-c:a", "pcm_s16le",
+            "-ar", str(DEFAULT_SAMPLE_RATE), "-ac", str(DEFAULT_CHANNELS),
+            "-y", output_wav
+        ]
+        if not run_ffmpeg(pad_cmd, f"Apply Padding to Track #{stream_idx}")[0]:
+            # Fallback: copy without padding
+            try:
+                shutil.copy2(concatenated_path, output_wav)
+                logger.warning(f"  Copied unpadded audio for track #{stream_idx}")
+            except Exception:
+                return None
+    else:
+        try:
+            shutil.copy2(concatenated_path, output_wav)
+        except Exception as e:
+            logger.error(f"  Failed to copy final audio for track #{stream_idx}: {e}")
+            return None
+    
+    logger.info(f"  [OK] Additional track #{stream_idx} synced successfully")
+    return output_wav
 
 def format_time(seconds):
     """Formats seconds into HH:MM:SS:ms format."""
@@ -961,7 +1386,7 @@ def filter_temporal_inconsistency(matches_after_similarity):
 
 def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_threshold, match_threshold, similarity_threshold):
     """Orchestrates the entire image pairing stage."""
-    logger.info("\n===== \1 =====")
+    logger.info("\n===== Image Pairing Stage =====")
     stage_start_time = time.time()
 
     # Define paths for extracted frames
@@ -979,16 +1404,17 @@ def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_
         logger.error("Failed to extract foreign frames.")
         return None
 
-    # --- Step 1.5: Calculate Search Window ---
-    logger.info("--- Calculating Frame Match Search Window ---")
+    # --- Step 1.5: Calculate Initial Search Window ---
+    logger.info("--- Calculating Initial Anchor Search Window ---")
     ref_duration = get_file_duration(ref_video_path, media_type='video')
     if ref_duration is None or ref_duration <= 0:
-        logger.warning("Could not determine reference video duration or duration is zero. Frame matching will compare against ALL foreign frames.")
-        match_search_window_seconds = float('inf') # Effectively disable windowing
+        logger.warning("Could not determine reference video duration or duration is zero. Initial search will use all foreign frames.")
+        initial_search_window_s = float('inf')
     else:
-        match_search_window_seconds = ref_duration * MATCH_WINDOW_PERCENT
+        initial_search_window_s = ref_duration * MATCH_WINDOW_PERCENT
         logger.info(f"  Reference duration: {ref_duration:.2f}s")
-        logger.info(f"  Calculated frame match search window: +/- {match_search_window_seconds:.2f}s ({MATCH_WINDOW_PERCENT*100}%)")
+        logger.info(f"  Initial anchor search window: +/- {initial_search_window_s:.2f}s ({MATCH_WINDOW_PERCENT*100}%)")
+        logger.info(f"  Subsequent match window: 0 to +{ANCHOR_FOLLOW_FORWARD_WINDOW_S:.1f}s forward from estimate")
 
     # --- Step 2: Map filenames to timestamps ---
     logger.info("--- Mapping Timestamps to Extracted Frames ---")
@@ -999,86 +1425,142 @@ def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_
         return None
     logger.info(f"  -> Mapped {len(ref_timestamps_dict)} reference and {len(foreign_timestamps_dict)} foreign timestamps.")
 
-    # --- Step 3: Initial Frame Matching (Parallel with Windowing) ---
-    logger.info(f"--- Initial Frame Matching (Template Threshold: {match_threshold}, Window: +/- {match_search_window_seconds:.2f}s) ---")
-    match_start_time = time.time()
-    initial_matches_dict = {} # Stores {ref_name: (foreign_name, ref_time, foreign_time)}
-    # === CORRECTION START ===
-    future_to_ref_name = {} # Use a dictionary to map Futures to ref_names
-    # === CORRECTION END ===
+    # --- Step 2.5: Pre-cache all foreign frames (read + resize once) ---
+    logger.info("--- Pre-caching Foreign Frames ---")
+    foreign_frame_cache = {}  # {filename: resized_grayscale_ndarray}
+    cache_failures = 0
+    for f_name in tqdm(foreign_filenames, desc="  Caching Foreign Frames", unit="frame", ncols=100, leave=False):
+        f_path = os.path.join(foreign_extract_path, f_name)
+        try:
+            img = cv2.imread(f_path, cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                resized = cv2.resize(img, (RESIZE_WIDTH, RESIZE_HEIGHT), interpolation=cv2.INTER_AREA)
+                if resized is not None and resized.size > 0:
+                    foreign_frame_cache[f_name] = resized
+                else:
+                    cache_failures += 1
+            else:
+                cache_failures += 1
+        except Exception as e:
+            logger.debug(f"Failed to cache foreign frame {f_name}: {e}")
+            cache_failures += 1
+    logger.info(f"  -> Cached {len(foreign_frame_cache)} foreign frames ({cache_failures} failures)")
 
-    # Use ThreadPoolExecutor for parallel image comparison
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # Submit tasks: compare each reference frame against a WINDOW of foreign frames
-        for ref_name in ref_filenames:
-            ref_time = ref_timestamps_dict.get(ref_name)
-            if ref_time is None:
-                logger.warning(f"Skipping match for ref frame {ref_name}: missing timestamp.")
+    # Build sorted foreign timestamps array for fast windowing
+    foreign_ts_array = np.array([foreign_timestamps_dict[fn] for fn in foreign_filenames])
+    foreign_names_array = np.array(foreign_filenames)
+
+    # --- Step 3: Anchor-and-Follow Frame Matching ---
+    logger.info(f"--- Anchor-and-Follow Frame Matching (Threshold: {match_threshold}) ---")
+    match_start_time = time.time()
+    initial_matches_dict = {}  # Stores {ref_name: (foreign_name, ref_time, foreign_time)}
+    skipped_count = 0
+
+    # Sort reference frames by timestamp for sequential processing
+    ref_sorted = sorted(
+        [(name, ref_timestamps_dict[name]) for name in ref_filenames if name in ref_timestamps_dict],
+        key=lambda x: x[1]
+    )
+
+    # Anchor state
+    anchor_ref_ts = None
+    anchor_foreign_ts = None
+
+    progress_bar = tqdm(total=len(ref_sorted), desc="  Matching Frames", unit="frame", ncols=100, leave=False)
+
+    for ref_name, ref_time in ref_sorted:
+        progress_bar.update(1)
+
+        # Read and resize reference frame
+        try:
+            ref_img = cv2.imread(os.path.join(ref_extract_path, ref_name), cv2.IMREAD_GRAYSCALE)
+            if ref_img is None:
+                skipped_count += 1
+                continue
+            ref_frame_comp = cv2.resize(ref_img, (RESIZE_WIDTH, RESIZE_HEIGHT), interpolation=cv2.INTER_AREA)
+            if ref_frame_comp is None or ref_frame_comp.size == 0:
+                skipped_count += 1
+                continue
+        except Exception as e:
+            logger.debug(f"Error reading ref frame {ref_name}: {e}")
+            skipped_count += 1
+            continue
+
+        # Determine search window
+        if anchor_ref_ts is None:
+            # No anchor yet: wide initial window centered on ref_time
+            min_t = ref_time - initial_search_window_s
+            max_t = ref_time + initial_search_window_s
+        else:
+            # Anchor established: estimate foreign position, search forward only
+            time_since_anchor = ref_time - anchor_ref_ts
+            estimated_foreign_ts = anchor_foreign_ts + time_since_anchor
+            min_t = estimated_foreign_ts  # start from estimate (no backward search)
+            max_t = estimated_foreign_ts + ANCHOR_FOLLOW_FORWARD_WINDOW_S
+
+        # Find candidate foreign frames within the window
+        mask = (foreign_ts_array >= min_t) & (foreign_ts_array <= max_t)
+        candidate_indices = np.where(mask)[0]
+
+        if len(candidate_indices) == 0:
+            logger.debug(f"No candidates for ref frame {ref_name} (time {ref_time:.3f}s)")
+            continue
+
+        # Get candidate names and timestamps
+        candidate_names = foreign_names_array[candidate_indices]
+        candidate_ts = foreign_ts_array[candidate_indices]
+
+        # Sort candidates by proximity to estimated position (closest first)
+        if anchor_ref_ts is not None:
+            estimated = anchor_foreign_ts + (ref_time - anchor_ref_ts)
+        else:
+            estimated = ref_time
+        proximity_order = np.argsort(np.abs(candidate_ts - estimated))
+        candidate_names = candidate_names[proximity_order]
+        candidate_ts = candidate_ts[proximity_order]
+
+        # Compare against candidates, early-stop on first above-threshold match
+        best_score = -1.0
+        best_foreign_name = None
+        best_foreign_ts = None
+
+        for c_name, c_ts in zip(candidate_names, candidate_ts):
+            c_name_str = str(c_name)
+            if c_name_str not in foreign_frame_cache:
                 continue
 
-            # Determine the time window for foreign frame search
-            min_foreign_time = ref_time - match_search_window_seconds
-            max_foreign_time = ref_time + match_search_window_seconds
-
-            # Filter foreign filenames based on timestamp window
-            candidate_foreign_frames = [
-                f_name for f_name in foreign_filenames
-                if min_foreign_time <= foreign_timestamps_dict.get(f_name, -1) <= max_foreign_time # Check if foreign ts is within window
-            ]
-
-            # Only submit task if there are candidates within the window
-            if candidate_foreign_frames:
-                future = executor.submit(process_image_pair_for_match,
-                                         ref_name,
-                                         candidate_foreign_frames, # Pass the filtered list
-                                         ref_extract_path,
-                                         foreign_extract_path,
-                                         match_threshold)
-                # === CORRECTION START ===
-                future_to_ref_name[future] = ref_name # Store mapping in dictionary
-                # === CORRECTION END ===
-            else:
-                logger.debug(f"No foreign frame candidates found within window for ref frame {ref_name} (time {ref_time:.3f}s)")
-
-
-        # Process results as they complete
-        num_processed = 0
-        skipped_count = 0
-        # === CORRECTION START ===
-        # Pass only the futures (dictionary keys) to as_completed
-        futures_iterable = concurrent.futures.as_completed(future_to_ref_name)
-        progress_bar = tqdm(total=len(future_to_ref_name), desc="  Matching Frames", unit="frame", ncols=100, leave=False)
-
-        for future in futures_iterable: # Iterate through completed futures
-            ref_name = future_to_ref_name[future] # Get the ref_name using the dictionary
-        # === CORRECTION END ===
+            foreign_frame_comp = foreign_frame_cache[c_name_str]
             try:
-                result = future.result() # Get result from the completed thread
-                if result:
-                    # If a match was found (foreign_name, score)
-                    foreign_name = result[0]
-                    # Retrieve corresponding timestamps
-                    # No need to get ref_time again, it's already mapped
-                    foreign_time = foreign_timestamps_dict.get(foreign_name)
-                    # Store the match details if timestamps are valid
-                    if ref_timestamps_dict.get(ref_name) is not None and foreign_time is not None: # Ensure both timestamps are valid
-                        initial_matches_dict[ref_name] = (foreign_name, ref_timestamps_dict[ref_name], foreign_time)
-                    else:
-                         logger.warning(f"Timestamp missing for match: Ref '{ref_name}', Foreign '{foreign_name}'")
-                         skipped_count += 1
-                # else: No match found above threshold in the window for this ref_frame
+                result = cv2.matchTemplate(foreign_frame_comp, ref_frame_comp, cv2.TM_CCOEFF_NORMED)
+                _, maxVal, _, _ = cv2.minMaxLoc(result)
             except Exception as e:
-                # Catch errors from individual threads
-                logger.error(f"\nError processing match task for ref frame {ref_name}: {e}", exc_info=False) # Less verbose stack trace for worker errors
-                skipped_count += 1
-            finally:
-                num_processed += 1
-                progress_bar.update(1)
-        progress_bar.close()
+                logger.debug(f"matchTemplate error {ref_name} vs {c_name_str}: {e}")
+                continue
 
+            if maxVal > best_score:
+                best_score = maxVal
+                best_foreign_name = c_name_str
+                best_foreign_ts = float(c_ts)
+                # Early stop: good enough match found near estimated position
+                if best_score >= match_threshold:
+                    break
+
+        # Record match if above threshold
+        if best_foreign_name is not None and best_score >= match_threshold:
+            initial_matches_dict[ref_name] = (best_foreign_name, ref_time, best_foreign_ts)
+
+            # Set anchor on first match
+            if anchor_ref_ts is None:
+                anchor_ref_ts = ref_time
+                anchor_foreign_ts = best_foreign_ts
+                offset = best_foreign_ts - ref_time
+                logger.info(f"  Anchor established: ref {ref_time:.1f}s -> foreign {best_foreign_ts:.1f}s (offset {offset:+.1f}s, score {best_score:.3f})")
+
+    progress_bar.close()
+    del foreign_frame_cache  # Free memory
 
     match_elapsed_time = time.time() - match_start_time
-    logger.info(f"  -> Initial matching complete. Found {len(initial_matches_dict)} potential pairs ({skipped_count} skipped due to errors/missing data). ({match_elapsed_time:.2f}s).")
+    logger.info(f"  -> Anchor-and-follow matching complete. Found {len(initial_matches_dict)} potential pairs ({skipped_count} skipped). ({match_elapsed_time:.2f}s).")
 
     if not initial_matches_dict:
         logger.error("No initial matches found between reference and foreign frames. Cannot proceed.")
@@ -1378,8 +1860,10 @@ def process_segment_iteratively(foreign_wav_full, foreign_start, foreign_end, re
             concat_list_path = os.path.join(temp_dir, f"concat_list_{segment_num:04d}.txt")
             try:
                 with open(concat_list_path, 'w', encoding='utf-8') as f_concat:
-                    f_concat.write(f"file '{os.path.basename(best_segment_path)}'\n")
-                    f_concat.write(f"file '{os.path.basename(silence_path)}'\n")
+                    abs_best = os.path.abspath(best_segment_path).replace("\\", "/")
+                    abs_silence = os.path.abspath(silence_path).replace("\\", "/")
+                    f_concat.write(f"file '{abs_best}'\n")
+                    f_concat.write(f"file '{abs_silence}'\n")
             except IOError as e:
                  logger.error(f" Segment {segment_num}: Failed to write concat list: {e}")
                  return None
@@ -1427,7 +1911,7 @@ def run_progressive_sync_iterative(args, visual_anchors_details, output_audio_pa
     Audio sync stage using iterative refinement for precise segment durations.
     Filters anchors, processes each segment iteratively, concatenates, and applies delay.
     """
-    logger.info("\n===== \1 =====")
+    logger.info("\n===== Audio Synchronization Stage =====")
     stage_start_time = time.time()
 
     # Define full paths for extracted audio
@@ -1752,8 +2236,9 @@ def run_progressive_sync_iterative(args, visual_anchors_details, output_audio_pa
     try:
         with open(concat_list_path, 'w', encoding='utf-8') as f_concat:
             for seg_path in processed_segment_files:
-                # Use relative paths within temp dir, ensure forward slashes for ffmpeg compatibility
-                f_concat.write(f"file '{os.path.basename(seg_path)}'\n")
+                # Absolute path required: concat demuxer resolves relative to process CWD, not list location
+                abs_path = os.path.abspath(seg_path).replace("\\", "/")
+                f_concat.write(f"file '{abs_path}'\n")
     except IOError as e:
         logger.error(f"-> Failed to create final concat list: {e}")
         return None, None
@@ -1886,7 +2371,7 @@ def create_qc_images(visual_anchors_details, final_segment_anchors,
         logger.warning("QC image generation skipped: Not enough final segment anchors (need >= 3) to generate QC for intermediate points.")
         return
 
-    logger.info("\n===== \1 =====")
+    logger.info("\n===== QC Image Generation =====")
     logger.info(f"Saving QC images to: {qc_output_dir}")
     os.makedirs(qc_output_dir, exist_ok=True)
     start_time = time.time()
@@ -1939,107 +2424,73 @@ def create_qc_images(visual_anchors_details, final_segment_anchors,
 
 # --- Muxing Function ---
 
-def run_muxing(args, ref_stream_idx, synced_subtitles=None):
+def run_muxing(args, ref_stream_idx, synced_subtitles=None, synced_foreign_tracks=None):
     """
-    Muxes the reference video with its original audio, the newly synced foreign audio, and synced subtitles.
-    Handles deletion of temporary audio files.
+    Muxes synced foreign audio track(s) into the reference video while preserving ALL original
+    streams, metadata, attachments (fonts), and chapters from the reference video.
+    
+    For MKV output: Uses mkvmerge which natively preserves everything.
+    For non-MKV output: Uses ffmpeg with full stream mapping.
+    
+    Each foreign audio track is tagged with proper language metadata.
+    
+    Args:
+        args: parsed arguments
+        ref_stream_idx: absolute stream index of reference audio (for ffmpeg fallback)
+        synced_subtitles: list of subtitle dicts (optional)
+        synced_foreign_tracks: list of dicts [{'wav_path': str, 'language': str, 'stream_idx': int}, ...]
+            If None, falls back to single-track mode using args.output_audio and args.foreign_lang
     """
-    if not args.output_video: # Check the required output video path
+    if not args.output_video:
         logger.error("No output video path specified. Cannot mux.")
         return False
-    if not os.path.exists(args.output_audio):
-        logger.error(f"Muxing failed: Synced audio file '{args.output_audio}' not found.")
-        return False
 
-    logger.info("\n===== \1 =====")
+    # Build track list (backward compatible: single track if synced_foreign_tracks not provided)
+    if synced_foreign_tracks is None:
+        synced_foreign_tracks = [{
+            'wav_path': args.output_audio,
+            'language': args.foreign_lang,
+            'stream_idx': args.foreign_stream_idx or 0,
+        }]
+
+    # Validate all WAV files exist
+    for track in synced_foreign_tracks:
+        if not os.path.exists(track['wav_path']):
+            logger.error(f"Muxing failed: Synced audio file '{track['wav_path']}' not found.")
+            return False
+
+    logger.info("\n===== Muxing Stage =====")
     logger.info(f"  Reference Video Source: {os.path.basename(args.ref_video)}")
-    logger.info(f"  Synced Foreign Audio:   {os.path.basename(args.output_audio)}")
-    logger.info(f"  Output Muxed Video:     {os.path.basename(args.output_video)}") # Use output_video
+    for i, track in enumerate(synced_foreign_tracks):
+        logger.info(f"  Foreign Audio Track {i+1}:  Stream #{track['stream_idx']} ({track['language']}) -> {os.path.basename(track['wav_path'])}")
+    logger.info(f"  Output Muxed Video:     {os.path.basename(args.output_video)}")
 
-    # Reference audio stream index should have been determined in the sync stage
-    if ref_stream_idx is None:
-         logger.warning("Reference stream index not provided to muxing stage, attempting to find again.")
-         ref_streams = get_stream_info(args.ref_video)
-         ref_stream_idx = find_audio_stream_index_by_lang(ref_streams, args.ref_lang)
-         if ref_stream_idx is None:
-              logger.error("Could not determine reference audio stream index for muxing. Aborting mux.")
-              return False # Return False here so main knows muxing failed
-    logger.info(f"  Using Reference Audio Stream Index: {ref_stream_idx}")
+    is_mkv_output = args.output_video.lower().endswith(('.mkv', '.mka', '.mks'))
 
-    # Construct FFmpeg command for muxing
-    ffmpeg_cmd = [
-        'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-stats',
-        '-i', args.ref_video,              # Input 0: Reference video (contains video + original audio)
-        '-i', args.output_audio,           # Input 1: Synced foreign audio (WAV)
-    ]
-    
-    # Add subtitle inputs
-    if synced_subtitles:
-        for sub_info in synced_subtitles:
-            ffmpeg_cmd.extend(['-i', sub_info['path']])
-        logger.info(f"  Including {len(synced_subtitles)} synced subtitle stream(s)")
-    
-    # Map streams
-    ffmpeg_cmd.extend([
-        '-map', '0:v:0',                   # Map video stream from Input 0
-        '-map', f'0:{ref_stream_idx}',     # Map reference audio
-        '-map', '1:a:0',                   # Map synced foreign audio stream from Input 1
-    ])
-    
-    # Map subtitle streams
-    if synced_subtitles:
-        for i, sub_info in enumerate(synced_subtitles):
-            sub_input_idx = i + 2  # 0=ref video, 1=audio, 2+=subtitles
-            ffmpeg_cmd.extend(['-map', f'{sub_input_idx}:s'])
-    
-    # Codec settings
-    ffmpeg_cmd.extend([
-        '-c:v', 'copy',                    # Copy video stream without re-encoding
-        '-c:a:0', 'copy',                  # Copy original reference audio without re-encoding
-        '-c:a:1', args.mux_foreign_codec,  # Codec for the second audio track (synced)
-    ])
+    if is_mkv_output and MKVMERGE_EXEC:
+        success = _mux_with_mkvmerge(args, synced_foreign_tracks, synced_subtitles)
+    else:
+        if is_mkv_output and not MKVMERGE_EXEC:
+            logger.warning("mkvmerge not found. Falling back to ffmpeg for MKV muxing.")
+            logger.warning("  Note: Some attachments/chapters may not be preserved. Install mkvtoolnix for best results.")
+        success = _mux_with_ffmpeg(args, ref_stream_idx, synced_foreign_tracks, synced_subtitles)
 
-    # Add bitrate only if re-encoding
-    if args.mux_foreign_codec != 'copy':
-        ffmpeg_cmd.extend(['-b:a:1', args.mux_foreign_bitrate])
-    
-    # Add subtitle codec - use mov_text for MP4, srt for MKV
-    if synced_subtitles:
-        subtitle_codec = 'mov_text' if args.output_video.lower().endswith('.mp4') else 'srt'
-        ffmpeg_cmd.extend(['-c:s', subtitle_codec])
-        
-        # Add language metadata for subtitles
-        for i, sub_info in enumerate(synced_subtitles):
-            ffmpeg_cmd.extend(['-metadata:s:s:{}'.format(i), f"language={sub_info['language']}"])
-
-    # Metadata (REMOVED language tags as requested)
-    ffmpeg_cmd.extend([
-        # '-metadata:s:a:0', f'language={args.ref_lang}',  # Removed
-        # '-metadata:s:a:0', 'title=Original', # Optional: Add titles if desired
-        # '-disposition:s:a:0', 'default', # Optional: Set dispositions if desired
-        # '-metadata:s:a:1', f'language={args.foreign_lang}', # Removed
-        # '-metadata:s:a:1', 'title=Foreign Synced', # Optional
-        # '-disposition:s:a:1', '0', # Optional
-        '-y',
-        args.output_video
-    ])
-
-    # Execute the muxing command
-    success, _ = run_ffmpeg(ffmpeg_cmd, "Mux Final Video")
-
-    # Determine if the WAV file was temporary (i.e., not specified by user)
+    # Clean up temporary WAV files
     is_temp_wav = args.output_audio_original is None
-
-    # Attempt to delete the audio file *if* it was temporary, regardless of muxing success
-    if os.path.exists(args.output_audio) and is_temp_wav:
-        try:
-            os.remove(args.output_audio)
-            logger.info(f"  -> Deleted temporary audio file: {args.output_audio}")
-        except Exception as e:
-            logger.warning(f"  Note: Could not delete temporary audio file '{args.output_audio}': {e}")
-    elif not is_temp_wav:
+    for track in synced_foreign_tracks:
+        wav_path = track['wav_path']
+        # Delete temp WAVs (the primary one if temp, and always additional ones)
+        is_additional = wav_path != args.output_audio
+        should_delete = is_additional or is_temp_wav
+        if os.path.exists(wav_path) and should_delete:
+            try:
+                os.remove(wav_path)
+                logger.info(f"  -> Deleted temporary audio file: {os.path.basename(wav_path)}")
+            except Exception as e:
+                logger.warning(f"  Note: Could not delete temporary audio file '{os.path.basename(wav_path)}': {e}")
+    
+    if not is_temp_wav:
         logger.info(f"  Keeping user-specified synchronized audio file: {args.output_audio}")
-
 
     if not success:
         logger.error(f"Muxing failed.")
@@ -2049,8 +2500,182 @@ def run_muxing(args, ref_stream_idx, synced_subtitles=None):
     return True
 
 
+def _mux_with_mkvmerge(args, synced_foreign_tracks, synced_subtitles=None):
+    """
+    Mux using mkvmerge - preserves ALL original content from reference video
+    and adds synced foreign audio track(s) with proper language tagging.
+    """
+    logger.info("  Using mkvmerge (preserves all original content)")
+
+    # Pre-encode foreign audio tracks if needed (mkvmerge can't transcode)
+    encoded_tracks = []
+    temp_encoded_files = []
+
+    for track in synced_foreign_tracks:
+        foreign_audio_input = track['wav_path']
+        
+        if args.mux_foreign_codec != 'copy' and args.mux_foreign_codec != 'pcm_s16le':
+            ext_map = {'aac': '.m4a', 'ac3': '.ac3', 'flac': '.flac', 'opus': '.opus'}
+            ext = ext_map.get(args.mux_foreign_codec, '.mka')
+            temp_encoded = track['wav_path'] + ext
+            
+            encode_cmd = [
+                'ffmpeg', '-hide_banner', '-loglevel', 'warning',
+                '-i', track['wav_path'],
+                '-c:a', args.mux_foreign_codec,
+                '-b:a', args.mux_foreign_bitrate,
+                '-y', temp_encoded
+            ]
+            encode_success, _ = run_ffmpeg(encode_cmd, f"Pre-encode track #{track['stream_idx']}")
+            if not encode_success:
+                logger.error(f"Failed to pre-encode track #{track['stream_idx']}")
+                # Clean up already encoded files
+                for f in temp_encoded_files:
+                    try: os.remove(f)
+                    except: pass
+                return False
+            foreign_audio_input = temp_encoded
+            temp_encoded_files.append(temp_encoded)
+        
+        encoded_tracks.append({**track, 'encoded_path': foreign_audio_input})
+
+    # Build mkvmerge command
+    mkvmerge_cmd = [
+        'mkvmerge',
+        '--output', args.output_video,
+        # Reference video: include everything as-is
+        args.ref_video,
+    ]
+
+    # Add each foreign audio track with language/title options BEFORE the file
+    for i, track in enumerate(encoded_tracks):
+        mkvmerge_cmd.extend([
+            '--language', f'0:{track["language"]}',
+            track['encoded_path'],
+        ])
+
+    # Add synced subtitle files if available
+    if synced_subtitles:
+        for sub_info in synced_subtitles:
+            mkvmerge_cmd.extend([
+                '--language', f"0:{sub_info['language']}",
+                sub_info['path'],
+            ])
+        logger.info(f"  Including {len(synced_subtitles)} synced subtitle stream(s)")
+
+    success = run_mkvmerge(mkvmerge_cmd, "Mux Final Video (mkvmerge)")
+
+    # Clean up temp encoded files
+    for f in temp_encoded_files:
+        try: os.remove(f)
+        except: pass
+
+    return success
+
+
+def _mux_with_ffmpeg(args, ref_stream_idx, synced_foreign_tracks, synced_subtitles=None):
+    """
+    Mux using ffmpeg - maps ALL streams from reference video and adds
+    synced foreign audio track(s) with proper language metadata.
+    """
+    logger.info("  Using ffmpeg (mapping all original streams)")
+
+    if ref_stream_idx is None:
+        logger.warning("Reference stream index not provided to muxing stage, attempting to find again.")
+        ref_streams = get_stream_info(args.ref_video)
+        ref_stream_idx = find_audio_stream_index_by_lang(ref_streams, args.ref_lang)
+        if ref_stream_idx is None:
+            logger.error("Could not determine reference audio stream index for muxing. Aborting mux.")
+            return False
+    logger.info(f"  Using Reference Audio Stream Index: {ref_stream_idx}")
+
+    # Probe the reference video to count audio streams for metadata indexing
+    probe_cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 'a',
+        '-show_entries', 'stream=index',
+        '-of', 'json',
+        args.ref_video
+    ]
+    try:
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+        ref_audio_streams = json.loads(result.stdout).get('streams', [])
+        num_ref_audio = len(ref_audio_streams)
+    except Exception:
+        num_ref_audio = 1
+
+    # Build ffmpeg command
+    ffmpeg_cmd = [
+        'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-stats',
+        '-i', args.ref_video,       # Input 0: Reference video (ALL streams)
+    ]
+
+    # Add each foreign audio track as an input
+    for i, track in enumerate(synced_foreign_tracks):
+        ffmpeg_cmd.extend(['-i', track['wav_path']])  # Input 1, 2, 3...
+
+    # Add subtitle inputs after audio inputs
+    subtitle_input_start = len(synced_foreign_tracks) + 1  # After ref video + foreign tracks
+    if synced_subtitles:
+        for sub_info in synced_subtitles:
+            ffmpeg_cmd.extend(['-i', sub_info['path']])
+        logger.info(f"  Including {len(synced_subtitles)} synced subtitle stream(s)")
+
+    # Map ALL streams from reference video
+    ffmpeg_cmd.extend(['-map', '0'])
+
+    # Map each foreign audio track
+    for i in range(len(synced_foreign_tracks)):
+        ffmpeg_cmd.extend(['-map', f'{i+1}:a:0'])
+
+    # Map subtitle streams
+    if synced_subtitles:
+        for i in range(len(synced_subtitles)):
+            ffmpeg_cmd.extend(['-map', f'{subtitle_input_start + i}:s'])
+
+    # Codec settings - copy everything from reference
+    ffmpeg_cmd.extend(['-c', 'copy'])
+
+    # Encode each new foreign audio track
+    for i, track in enumerate(synced_foreign_tracks):
+        audio_idx = num_ref_audio + i
+        ffmpeg_cmd.extend([f'-c:a:{audio_idx}', args.mux_foreign_codec])
+        if args.mux_foreign_codec != 'copy':
+            ffmpeg_cmd.extend([f'-b:a:{audio_idx}', args.mux_foreign_bitrate])
+
+    # Subtitle codec for new subtitles
+    if synced_subtitles:
+        ffmpeg_cmd.extend(['-c:s', 'copy'])
+
+    # Metadata for each new foreign audio track
+    for i, track in enumerate(synced_foreign_tracks):
+        audio_idx = num_ref_audio + i
+        ffmpeg_cmd.extend([
+            f'-metadata:s:a:{audio_idx}', f'language={track["language"]}',
+        ])
+
+    # Subtitle metadata
+    if synced_subtitles:
+        for i, sub_info in enumerate(synced_subtitles):
+            ffmpeg_cmd.extend([f'-metadata:s:s:{i}', f"language={sub_info['language']}"])
+
+    # Preserve chapters and global metadata
+    ffmpeg_cmd.extend([
+        '-map_metadata', '0',
+        '-map_chapters', '0',
+        '-y',
+        args.output_video
+    ])
+
+    success, _ = run_ffmpeg(ffmpeg_cmd, "Mux Final Video (ffmpeg)")
+    return success
+
+
 # --- Main Execution ---
 # --- SUBTITLE SYNCHRONIZATION FUNCTIONS ---
+
+# ---- SRT helpers ----
+
 def seconds_to_srt_time(seconds):
     """Convert seconds to SRT timestamp format (HH:MM:SS,mmm)"""
     hours = int(seconds // 3600)
@@ -2122,17 +2747,189 @@ def write_srt_file(srt_path, subtitles):
         return False
 
 
+# ---- ASS/SSA helpers ----
+
+def seconds_to_ass_time(seconds):
+    """Convert seconds to ASS timestamp format (H:MM:SS.cc) — centisecond precision"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    centisecs = int(round((seconds - int(seconds)) * 100))
+    if centisecs >= 100:  # handle rounding edge
+        centisecs = 99
+    return f"{hours}:{minutes:02d}:{secs:02d}.{centisecs:02d}"
+
+
+def ass_time_to_seconds(ass_time):
+    """Convert ASS timestamp format (H:MM:SS.cc) to seconds"""
+    try:
+        parts = ass_time.strip().split(':')
+        h = int(parts[0])
+        m = int(parts[1])
+        rest = parts[2].split('.')
+        s = int(rest[0])
+        cs = int(rest[1]) if len(rest) > 1 else 0
+        return h * 3600 + m * 60 + s + cs / 100.0
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def parse_ass_file(ass_path):
+    """Parse ASS/SSA file preserving all header/style data.
+    
+    Returns:
+        dict with keys:
+            'header_lines': list of all lines before [Events] Dialogue entries
+            'format_line': the Format: line from [Events] section
+            'dialogues': list of dicts with 'start', 'end', 'raw_fields' (everything after End timestamp)
+            'tail_lines': any lines after the last Dialogue entry
+        or None on failure
+    """
+    try:
+        with open(ass_path, 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(ass_path, 'r', encoding='latin-1') as f:
+                content = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read ASS file {ass_path}: {e}")
+            return None
+    
+    lines = content.split('\n')
+    
+    header_lines = []
+    format_line = None
+    dialogues = []
+    tail_lines = []
+    in_events = False
+    past_dialogues = False
+    
+    # ASS Dialogue line regex: Dialogue: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+    # We only need to parse Start and End; everything else is preserved verbatim
+    dialogue_re = re.compile(
+        r'^(Dialogue:\s*)(\d+),\s*'              # "Dialogue: " + Layer + ","
+        r'(\d+:\d{2}:\d{2}\.\d{2}),\s*'          # Start timestamp
+        r'(\d+:\d{2}:\d{2}\.\d{2}),\s*'          # End timestamp
+        r'(.*)$',                                  # Everything else (Style,Name,...,Text)
+        re.DOTALL
+    )
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Detect [Events] section
+        if stripped.lower() == '[events]':
+            in_events = True
+            header_lines.append(line)
+            continue
+        
+        # Detect Format line within Events
+        if in_events and stripped.lower().startswith('format:') and format_line is None:
+            format_line = line
+            continue
+        
+        # Parse Dialogue lines
+        if in_events and stripped.startswith('Dialogue:'):
+            m = dialogue_re.match(stripped)
+            if m:
+                dialogues.append({
+                    'start': ass_time_to_seconds(m.group(3)),
+                    'end': ass_time_to_seconds(m.group(4)),
+                    'prefix': m.group(1),        # "Dialogue: "
+                    'layer': m.group(2),          # Layer number
+                    'rest': m.group(5),           # Style,Name,...,Text — all preserved
+                })
+            else:
+                # Malformed dialogue line, keep as-is in tail
+                tail_lines.append(line)
+            continue
+        
+        # Detect new section after Events (e.g. [Fonts], [Graphics])
+        if in_events and stripped.startswith('[') and len(dialogues) > 0:
+            in_events = False
+            past_dialogues = True
+            tail_lines.append(line)
+            continue
+        
+        # Sort into header vs tail
+        if past_dialogues or (in_events and len(dialogues) > 0 and not stripped.startswith('Dialogue:')):
+            tail_lines.append(line)
+        else:
+            header_lines.append(line)
+    
+    if not dialogues:
+        logger.warning(f"No Dialogue lines found in ASS file: {ass_path}")
+        return None
+    
+    return {
+        'header_lines': header_lines,
+        'format_line': format_line,
+        'dialogues': dialogues,
+        'tail_lines': tail_lines,
+    }
+
+
+def write_ass_file(ass_path, ass_data, adjusted_dialogues):
+    """Write ASS/SSA file with adjusted dialogue timings, preserving all header/style data.
+    
+    Args:
+        ass_path: output file path
+        ass_data: the dict returned by parse_ass_file (header, format, tail)
+        adjusted_dialogues: list of dicts with 'start', 'end', 'prefix', 'layer', 'rest'
+    """
+    try:
+        with open(ass_path, 'w', encoding='utf-8') as f:
+            # Write header (includes [Script Info], [V4+ Styles], [Events] section header)
+            for line in ass_data['header_lines']:
+                f.write(line + '\n')
+            
+            # Write Format line
+            if ass_data['format_line']:
+                f.write(ass_data['format_line'] + '\n')
+            
+            # Write adjusted Dialogue lines
+            for dlg in adjusted_dialogues:
+                start_ts = seconds_to_ass_time(dlg['start'])
+                end_ts = seconds_to_ass_time(dlg['end'])
+                f.write(f"{dlg['prefix']}{dlg['layer']},{start_ts},{end_ts},{dlg['rest']}\n")
+            
+            # Write tail (any sections after Events like [Fonts])
+            for line in ass_data['tail_lines']:
+                f.write(line + '\n')
+        
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write ASS file {ass_path}: {e}")
+        return False
+
+
+# ---- Shared timing adjustment (works for both SRT and ASS dialogue entries) ----
+
 def adjust_subtitle_timing(subtitles, segment_anchors, ref_delay):
-    """Adjust subtitle timing based on audio segments"""
+    """Adjust subtitle timing based on audio segments.
+    
+    Each subtitle entry must have 'start' and 'end' keys (in seconds).
+    All other keys are preserved (e.g. 'text' for SRT, 'prefix'/'layer'/'rest' for ASS).
+    
+    Returns:
+        tuple: (adjusted_subtitles list, dropped_subtitles list)
+        Each dropped entry is a dict with 'index', 'start', 'end', and 'reason'.
+    """
     adjusted_subtitles = []
+    dropped_subtitles = []
     num_segments = len(segment_anchors) - 1
-    skipped_outside = 0
     
     logger.debug(f"\nSubtitle timing adjustment:")
     logger.debug(f"  Total subtitles: {len(subtitles)}")
     logger.debug(f"  Segments: {num_segments}")
     logger.debug(f"  Reference delay: {ref_delay:.3f}s (NOT added to subtitles - they sync to video)")
     logger.debug(f"  Segment ranges:")
+    
+    # Compute segment boundaries for logging
+    foreign_min = segment_anchors[0][1] if num_segments > 0 else 0
+    foreign_max = segment_anchors[-1][1] if num_segments > 0 else 0
+    
     for i in range(num_segments):
         ref_s, foreign_s = segment_anchors[i]
         ref_e, foreign_e = segment_anchors[i + 1]
@@ -2149,9 +2946,21 @@ def adjust_subtitle_timing(subtitles, segment_anchors, ref_delay):
                 break
         
         if segment_idx is None:
-            skipped_outside += 1
-            if idx < 3 or idx >= len(subtitles) - 3:  # Log first and last few
-                logger.debug(f"  Sub {idx+1} at {sub['start']:.2f}s: OUTSIDE all segments")
+            # Determine reason for drop
+            if sub['start'] < foreign_min:
+                reason = f"before first segment boundary ({foreign_min:.2f}s)"
+            elif sub['start'] >= foreign_max:
+                reason = f"after last segment boundary ({foreign_max:.2f}s)"
+            else:
+                reason = "falls in gap between segments"
+            
+            dropped_subtitles.append({
+                'index': idx + 1,
+                'start': sub['start'],
+                'end': sub['end'],
+                'text_preview': sub.get('text', sub.get('rest', ''))[:60],
+                'reason': reason,
+            })
             continue
         
         ref_seg_start = segment_anchors[segment_idx][0]
@@ -2177,24 +2986,23 @@ def adjust_subtitle_timing(subtitles, segment_anchors, ref_delay):
         if idx < 3:  # Log first few for debugging
             logger.debug(f"  Sub {idx+1}: {sub['start']:.2f}s -> {new_start:.2f}s (seg {segment_idx+1}, stretch {stretch_factor:.4f}x)")
         
-        adjusted_subtitles.append({
-            'start': max(0, new_start),
-            'end': max(0, new_end),
-            'text': sub['text']
-        })
+        # Build adjusted entry preserving all original keys
+        adjusted = dict(sub)  # shallow copy all fields
+        adjusted['start'] = max(0, new_start)
+        adjusted['end'] = max(0, new_end)
+        adjusted_subtitles.append(adjusted)
     
-    if skipped_outside > 0:
-        logger.info(f"  Note: Skipped {skipped_outside} subtitles outside segment boundaries")
-    
-    return adjusted_subtitles
+    return adjusted_subtitles, dropped_subtitles
 
+
+# ---- Stream detection and extraction ----
 
 def get_subtitle_streams(video_path):
-    """Get list of subtitle streams from video file"""
+    """Get list of subtitle streams from video file, including codec info."""
     cmd = [
         'ffprobe', '-v', 'error',
         '-select_streams', 's',
-        '-show_entries', 'stream=index:stream_tags=language',
+        '-show_entries', 'stream=index,codec_name:stream_tags=language',
         '-of', 'json',
         video_path
     ]
@@ -2207,9 +3015,14 @@ def get_subtitle_streams(video_path):
         subtitle_streams = []
         for stream in streams:
             stream_idx = stream.get('index')
+            codec = stream.get('codec_name', 'unknown').lower()
             tags = stream.get('tags', {})
             lang = tags.get('language', 'unknown')
-            subtitle_streams.append({'index': stream_idx, 'language': lang})
+            subtitle_streams.append({
+                'index': stream_idx,
+                'language': lang,
+                'codec': codec,  # e.g. 'ass', 'ssa', 'subrip', 'srt', 'mov_text'
+            })
         
         return subtitle_streams
     except Exception as e:
@@ -2217,25 +3030,39 @@ def get_subtitle_streams(video_path):
         return []
 
 
-def extract_subtitle_stream(video_path, stream_idx, output_path):
-    """Extract subtitle stream to SRT file"""
+def extract_subtitle_stream(video_path, stream_idx, output_path, native_codec=False):
+    """Extract subtitle stream, optionally preserving native format.
+    
+    Args:
+        native_codec: if True, use '-c:s copy' to preserve ASS/SSA format.
+                      if False, convert to SRT via '-c:s srt'.
+    """
+    codec_args = ['-c:s', 'copy'] if native_codec else ['-c:s', 'srt']
     cmd = [
         'ffmpeg', '-hide_banner', '-loglevel', 'warning',
         '-i', video_path,
         '-map', f'0:{stream_idx}',
-        '-c:s', 'srt',
+        *codec_args,
         '-y', output_path
     ]
     
     try:
         subprocess.run(cmd, check=True, capture_output=True)
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logger.debug(f"Subtitle extraction failed (stream {stream_idx}): {e.stderr[:200] if e.stderr else 'no stderr'}")
         return False
 
 
+# ---- Main subtitle sync orchestrator ----
+
 def sync_subtitles(foreign_video, segment_anchors, ref_delay, temp_dir, foreign_lang):
-    """Synchronize subtitle streams from foreign video"""
+    """Synchronize subtitle streams from foreign video.
+    
+    Preserves ASS/SSA format natively (fonts, styles, positioning).
+    Falls back to SRT conversion for unsupported codecs.
+    Logs all dropped subtitles with reasons.
+    """
     logger.info("\n--- Subtitle Synchronization Stage ---")
     
     subtitle_streams = get_subtitle_streams(foreign_video)
@@ -2247,45 +3074,131 @@ def sync_subtitles(foreign_video, segment_anchors, ref_delay, temp_dir, foreign_
     logger.info(f"Found {len(subtitle_streams)} subtitle stream(s)")
     
     synced_subtitle_files = []
+    total_dropped = 0
+    
+    # Bitmap (image-based) subtitle codecs cannot be text-parsed or timing-adjusted.
+    # They are passed through untouched so they remain present in the output.
+    BITMAP_CODECS = {
+        'hdmv_pgs_subtitle': '.sup',   # Blu-ray PGS
+        'pgssub': '.sup',
+        'dvd_subtitle': '.sub',        # DVD VobSub
+        'dvdsub': '.sub',
+        'xsub': '.sub',
+    }
     
     for stream in subtitle_streams:
         stream_idx = stream['index']
         stream_lang = stream['language']
+        stream_codec = stream.get('codec', 'unknown')
         
-        logger.info(f"Processing subtitle stream {stream_idx} (lang: {stream_lang})")
-        
-        original_srt = os.path.join(temp_dir, f"subtitle_original_{stream_idx}.srt")
-        if not extract_subtitle_stream(foreign_video, stream_idx, original_srt):
-            logger.warning(f"  Failed to extract subtitle stream {stream_idx}")
+        # --- Bitmap subtitle pass-through (PGS, VobSub) ---
+        if stream_codec in BITMAP_CODECS:
+            bitmap_ext = BITMAP_CODECS[stream_codec]
+            logger.info(f"Processing subtitle stream {stream_idx} (lang: {stream_lang}, codec: {stream_codec}, format: BITMAP)")
+            logger.warning(f"  Stream {stream_idx} is a bitmap format ({stream_codec}) and CANNOT be timing-adjusted.")
+            logger.warning(f"  -> Passing it through UNCHANGED. Timing will match the foreign video, not the adjusted audio.")
+            
+            passthrough_path = os.path.join(temp_dir, f"subtitle_passthrough_{stream_idx}{bitmap_ext}")
+            if extract_subtitle_stream(foreign_video, stream_idx, passthrough_path, native_codec=True):
+                synced_subtitle_files.append({
+                    'path': passthrough_path,
+                    'language': stream_lang,
+                    'original_index': stream_idx,
+                    'format': f'BITMAP ({stream_codec}, pass-through)',
+                    'passthrough': True,
+                })
+                logger.info(f"  [OK] Bitmap subtitle passed through unchanged")
+            else:
+                logger.warning(f"  Failed to extract bitmap subtitle stream {stream_idx}")
             continue
         
-        subtitles = parse_srt_file(original_srt)
-        if not subtitles:
-            logger.warning(f"  No subtitles parsed from stream {stream_idx}")
-            continue
+        # Determine if this is an ASS/SSA stream
+        is_ass = stream_codec in ('ass', 'ssa')
+        format_label = 'ASS/SSA' if is_ass else 'SRT'
+        ext = '.ass' if is_ass else '.srt'
         
-        logger.info(f"  Parsed {len(subtitles)} subtitle entries")
+        logger.info(f"Processing subtitle stream {stream_idx} (lang: {stream_lang}, codec: {stream_codec}, format: {format_label})")
         
-        adjusted_subtitles = adjust_subtitle_timing(subtitles, segment_anchors, ref_delay)
-        logger.info(f"  Adjusted {len(adjusted_subtitles)} subtitle entries")
+        # Extract in native format for ASS, convert to SRT for others
+        original_path = os.path.join(temp_dir, f"subtitle_original_{stream_idx}{ext}")
+        if not extract_subtitle_stream(foreign_video, stream_idx, original_path, native_codec=is_ass):
+            # If native extraction failed for ASS, try SRT fallback
+            if is_ass:
+                logger.warning(f"  Native ASS extraction failed, trying SRT conversion fallback...")
+                original_path = os.path.join(temp_dir, f"subtitle_original_{stream_idx}.srt")
+                if not extract_subtitle_stream(foreign_video, stream_idx, original_path, native_codec=False):
+                    logger.warning(f"  Failed to extract subtitle stream {stream_idx}")
+                    continue
+                is_ass = False
+                ext = '.srt'
+                format_label = 'SRT (converted from ASS)'
+            else:
+                logger.warning(f"  Failed to extract subtitle stream {stream_idx}")
+                continue
         
-        synced_srt = os.path.join(temp_dir, f"subtitle_synced_{stream_idx}.srt")
-        if write_srt_file(synced_srt, adjusted_subtitles):
+        # Parse based on format
+        if is_ass:
+            ass_data = parse_ass_file(original_path)
+            if not ass_data:
+                logger.warning(f"  No dialogues parsed from ASS stream {stream_idx}")
+                continue
+            
+            subtitle_entries = ass_data['dialogues']
+            logger.info(f"  Parsed {len(subtitle_entries)} ASS dialogue entries (styles/fonts preserved)")
+        else:
+            subtitle_entries = parse_srt_file(original_path)
+            if not subtitle_entries:
+                logger.warning(f"  No subtitles parsed from stream {stream_idx}")
+                continue
+            ass_data = None
+        
+        logger.info(f"  Parsed {len(subtitle_entries)} subtitle entries")
+        
+        # Adjust timing (same logic for both formats)
+        adjusted_entries, dropped_entries = adjust_subtitle_timing(subtitle_entries, segment_anchors, ref_delay)
+        logger.info(f"  Adjusted {len(adjusted_entries)} subtitle entries")
+        
+        # Log dropped subtitles
+        if dropped_entries:
+            total_dropped += len(dropped_entries)
+            logger.warning(f"  DROPPED {len(dropped_entries)} subtitle(s) outside segment boundaries:")
+            # Log all dropped entries (not just first/last)
+            for drop in dropped_entries:
+                preview = drop['text_preview'].replace('\n', ' ').strip()
+                if preview:
+                    logger.warning(f"    Sub #{drop['index']} [{drop['start']:.2f}s - {drop['end']:.2f}s] "
+                                   f"Reason: {drop['reason']} | \"{preview}...\"")
+                else:
+                    logger.warning(f"    Sub #{drop['index']} [{drop['start']:.2f}s - {drop['end']:.2f}s] "
+                                   f"Reason: {drop['reason']}")
+        
+        # Write synced file in original format
+        synced_path = os.path.join(temp_dir, f"subtitle_synced_{stream_idx}{ext}")
+        
+        if is_ass:
+            write_ok = write_ass_file(synced_path, ass_data, adjusted_entries)
+        else:
+            write_ok = write_srt_file(synced_path, adjusted_entries)
+        
+        if write_ok:
             synced_subtitle_files.append({
-                'path': synced_srt,
+                'path': synced_path,
                 'language': stream_lang,
-                'original_index': stream_idx
+                'original_index': stream_idx,
+                'format': format_label,
             })
-            logger.info(f"  [OK] Synced subtitle saved")
+            logger.info(f"  [OK] Synced subtitle saved ({format_label})")
     
     if synced_subtitle_files:
         logger.info(f"[OK] Synced {len(synced_subtitle_files)} subtitle stream(s)")
+    if total_dropped > 0:
+        logger.warning(f"[WARN] Total dropped subtitles across all streams: {total_dropped}")
     
     return synced_subtitle_files
 
 
 def main():
-    global FFMPEG_EXEC, FFPROBE_EXEC
+    global FFMPEG_EXEC, FFPROBE_EXEC, MKVMERGE_EXEC
     parser = argparse.ArgumentParser(
         description="AVSync: Synchronizes foreign audio to a reference video using visual anchors and precise audio timing.",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -2308,7 +3221,7 @@ Example Usage:
 
 Workflow:
 1. Extracts scene change frames from both videos.
-2. Matches frames between videos using template matching within a calculated time window (+/- {MATCH_WINDOW_PERCENT*100}% of ref duration).
+2. Matches frames using anchor-and-follow: initial anchor search (+/- {MATCH_WINDOW_PERCENT*100}% of ref duration), then +{ANCHOR_FOLLOW_FORWARD_WINDOW_S}s forward from estimated position.
 3. Filters matches based on similarity and temporal consistency.
 4. Extracts audio tracks based on language tags or specified absolute indices.
 5. Determines audio content boundaries and filters anchor points based on minimum segment duration and duration difference.
@@ -2344,13 +3257,19 @@ Workflow:
     # --- Audio Processing Arguments ---
     audio_group = parser.add_argument_group('Audio Processing Parameters')
     audio_group.add_argument("--ref_lang", default=DEFAULT_REF_LANG, help=f"Reference audio language code (3-letter ISO 639-2/T) for stream selection. (Default: {DEFAULT_REF_LANG})")
-    audio_group.add_argument("--foreign_lang", default=DEFAULT_FOREIGN_LANG, help=f"Foreign audio language code (3-letter ISO 639-2/T) for stream selection. (Default: {DEFAULT_FOREIGN_LANG})")
+    audio_group.add_argument("--foreign_lang", default=DEFAULT_FOREIGN_LANG, help=f"Foreign audio language code (3-letter ISO 639-2/T, e.g., hin, jpn, spa). REQUIRED for proper metadata tagging. If not provided or invalid, you will be prompted. (Default: {DEFAULT_FOREIGN_LANG})")
     audio_group.add_argument("--db_threshold", type=float, default=DEFAULT_DB_THRESHOLD, help=f"Audio detection threshold (dBFS) to find start/end of content. (Default: {DEFAULT_DB_THRESHOLD:.1f})")
     audio_group.add_argument("--min_segment_duration", type=float, default=DEFAULT_MIN_SEGMENT_DURATION, help=f"Minimum duration (seconds) for a reference audio segment to be kept during anchor filtering. (Default: {DEFAULT_MIN_SEGMENT_DURATION:.1f})") # New Argument
     audio_group.add_argument("--first_segment_adjust", type=float, default=0.0, help="Adjustment in milliseconds for the FIRST segment. Positive = add padding at start, Negative = trim from start. Applied BEFORE atempo processing (Default: 0.0ms).")
     audio_group.add_argument("--last_segment_adjust", type=float, default=0.0, help="Adjustment in milliseconds for the LAST segment. Positive = add padding at end, Negative = trim from end. Applied BEFORE atempo processing (Default: 0.0ms).")
     audio_group.add_argument("--ref_stream_idx", type=int, default=None, help="Force specific *absolute* audio stream index for reference video (e.g., 1, 2, ...). Overrides --ref_lang.")
     audio_group.add_argument("--foreign_stream_idx", type=int, default=None, help="Force specific *absolute* audio stream index for foreign video. Overrides --foreign_lang.")
+    audio_group.add_argument("--foreign_tracks", type=str, default=None, metavar="TRACKS",
+        help="Which foreign audio tracks to sync and include in output. "
+             "Options: 'primary' (just the main track, default behavior), "
+             "'all' (sync all audio tracks from foreign video), "
+             "or comma-separated absolute stream indices (e.g., '1,2,3'). "
+             "In interactive mode without this flag, you will be prompted to choose.")
     audio_group.add_argument("--auto_detect", action="store_true", help="Skip audio stream selection prompts and use auto-detection.")
 
     # --- Muxing Arguments ---
@@ -2402,7 +3321,7 @@ Workflow:
     # Professional startup banner
     logger.info("")
     logger.info("=" * 70)
-    logger.info(" AVSync v12 - Audio/Video Synchronization Engine")
+    logger.info(" AVSync v14 - Audio/Video Synchronization Engine")
     logger.info("=" * 70)
     logger.info(f"Reference video : {args.ref_video}")
     logger.info(f"Foreign video   : {args.foreign_video}")
@@ -2422,15 +3341,26 @@ Workflow:
     # --- Find Executables ---
     FFMPEG_EXEC = find_executable("ffmpeg")
     FFPROBE_EXEC = find_executable("ffprobe")
+    MKVMERGE_EXEC = find_executable("mkvmerge")
     if not FFMPEG_EXEC or not FFPROBE_EXEC:
         logger.error("FATAL: Required 'ffmpeg' and/or 'ffprobe' executable not found in system PATH.")
         sys.exit(1)
     logger.info(f"Using ffmpeg: {FFMPEG_EXEC}")
     logger.info(f"Using ffprobe: {FFPROBE_EXEC}")
+    if MKVMERGE_EXEC:
+        logger.info(f"Using mkvmerge: {MKVMERGE_EXEC}")
+    else:
+        logger.warning("mkvmerge not found. MKV muxing will fall back to ffmpeg (attachments/chapters may not be preserved).")
+        logger.warning("  Install mkvtoolnix for best results: https://mkvtoolnix.download/")
 
     # --- Validate Input/Output Paths ---
     if not os.path.isfile(args.ref_video): logger.error(f"Reference video not found: {args.ref_video}"); sys.exit(1)
     if not os.path.isfile(args.foreign_video): logger.error(f"Foreign video not found: {args.foreign_video}"); sys.exit(1)
+
+    # --- Validate Foreign Language Code (for primary track / --foreign_lang default) ---
+    # This validates the --foreign_lang argument. Per-track language validation happens later.
+    primary_lang_from_arg = args.foreign_lang
+    primary_lang_valid = validate_language_code(args.foreign_lang) and args.foreign_lang.lower() not in ('foreign', 'und', 'unk')
 
     # --- Handle Audio Stream Selection ---
     # For reference video streams
@@ -2440,24 +3370,75 @@ Workflow:
         if args.ref_stream_idx is not None:
             logger.info(f"User selected Reference Stream Index: {args.ref_stream_idx}")
 
-    # For foreign video streams
+    # For foreign video streams (primary track for sync timing)
     if args.foreign_stream_idx is None and not args.auto_detect:
         # Prompt user, returns the absolute stream index if selected
-        args.foreign_stream_idx = prompt_user_for_audio_stream(args.foreign_video, "foreign")
+        args.foreign_stream_idx = prompt_user_for_audio_stream(args.foreign_video, "foreign (primary for sync)")
         if args.foreign_stream_idx is not None:
             logger.info(f"User selected Foreign Stream Index: {args.foreign_stream_idx}")
 
+    # --- Multi-Track Foreign Audio Selection ---
+    # Determine which foreign audio tracks to sync and include in the output
+    if args.foreign_tracks is not None:
+        # Explicit track selection via CLI
+        selected_foreign_tracks = parse_foreign_tracks_arg(
+            args.foreign_tracks, args.foreign_video, args.foreign_stream_idx)
+        if not selected_foreign_tracks:
+            logger.error("No valid foreign audio tracks selected via --foreign_tracks.")
+            sys.exit(1)
+        logger.info(f"Foreign tracks selected via --foreign_tracks: {[t['stream_idx'] for t in selected_foreign_tracks]}")
+    elif not args.auto_detect:
+        # Interactive mode: prompt user to select tracks
+        selected_foreign_tracks = prompt_user_for_foreign_tracks(
+            args.foreign_video, args.foreign_stream_idx)
+        if not selected_foreign_tracks:
+            # Fallback to primary only
+            selected_foreign_tracks = [{'stream_idx': args.foreign_stream_idx, 'language': None}]
+    else:
+        # Auto-detect mode: just the primary track
+        selected_foreign_tracks = [{'stream_idx': args.foreign_stream_idx, 'language': None}]
+
+    # Ensure the primary track is first and set its stream_idx if not yet determined
+    if selected_foreign_tracks and args.foreign_stream_idx is not None:
+        # Make sure primary is first
+        selected_foreign_tracks.sort(key=lambda x: 0 if x['stream_idx'] == args.foreign_stream_idx else 1)
+    
+    # If foreign_stream_idx not yet set, use first selected track
+    if args.foreign_stream_idx is None and selected_foreign_tracks:
+        args.foreign_stream_idx = selected_foreign_tracks[0]['stream_idx']
+
+    # --- Per-Track Language Validation ---
+    # Apply --foreign_lang to tracks that don't have metadata language
+    for track in selected_foreign_tracks:
+        if track.get('language') is None or track['language'].lower() in ('und', 'unk', ''):
+            if primary_lang_valid:
+                track['language'] = args.foreign_lang
+            # else: will be prompted below
+
+    # Validate all track languages
+    if not resolve_track_languages(selected_foreign_tracks, auto_detect=args.auto_detect):
+        logger.error("Cannot proceed without valid language codes for all foreign audio tracks.")
+        sys.exit(1)
+
+    # Update args.foreign_lang from primary track (for backward compatibility)
+    args.foreign_lang = selected_foreign_tracks[0]['language']
+    
+    # Store selected tracks in args for later use
+    args.selected_foreign_tracks = selected_foreign_tracks
+
     # Log the final stream selection choices
-    # Note: ref_stream_idx and foreign_stream_idx now hold the *absolute* index if specified or selected
     if args.ref_stream_idx is not None:
         logger.info(f"Ref Stream Index (Absolute): {args.ref_stream_idx} (User selected or forced)")
     else:
         logger.info(f"Ref Lang: {args.ref_lang} (Will auto-detect)")
 
-    if args.foreign_stream_idx is not None:
-        logger.info(f"Foreign Stream Index (Absolute): {args.foreign_stream_idx} (User selected or forced)")
+    if len(selected_foreign_tracks) == 1:
+        logger.info(f"Foreign Track: Stream #{selected_foreign_tracks[0]['stream_idx']} ({selected_foreign_tracks[0]['language']})")
     else:
-        logger.info(f"Foreign Lang: {args.foreign_lang} (Will auto-detect)")
+        logger.info(f"Foreign Tracks ({len(selected_foreign_tracks)}):")
+        for i, t in enumerate(selected_foreign_tracks):
+            role = "Primary" if i == 0 else "Additional"
+            logger.info(f"  [{role}] Stream #{t['stream_idx']} ({t['language']})")
 
     logger.info(f"Audio Threshold: {args.db_threshold} dB")
     logger.info(f"Min Segment Duration: {args.min_segment_duration}s") # Log new parameter
@@ -2466,7 +3447,7 @@ Workflow:
     logger.info(f"Scene Threshold: {args.scene_threshold}, Match Threshold: {args.match_threshold}, Similarity Threshold: {args.similarity_threshold}")
     if args.force_sync_points:
         logger.info(f"Forced Sync Points: {args.force_sync_points}")
-    logger.info(f"Frame Match Window: Calculated as {MATCH_WINDOW_PERCENT*100}% of reference video duration") # Log new behavior
+    logger.info(f"Frame Match: Anchor-and-follow (initial: +/- {MATCH_WINDOW_PERCENT*100}% of ref duration, subsequent: +{ANCHOR_FOLLOW_FORWARD_WINDOW_S}s forward)")
 
     # Validate output directories are writable for all specified outputs
     output_paths_to_check = [args.output_video, args.output_audio, args.output_csv]
@@ -2575,17 +3556,20 @@ Workflow:
 
         audio_sync_success = True
 
-        # Determine the *final* reference stream index used for muxing.
-        # It might have been auto-detected within run_progressive_sync_iterative if not forced.
+        # Determine the *final* reference stream index used for muxing (needed for ffmpeg fallback).
+        # mkvmerge-based muxing doesn't need this since it copies ALL streams from reference.
         final_ref_stream_idx = args.ref_stream_idx # Use forced/selected index if available
         if final_ref_stream_idx is None:
-            # If it was auto-detected, find it again (necessary for muxing)
+            # If it was auto-detected, find it again (necessary for ffmpeg muxing)
             temp_ref_streams = get_stream_info(args.ref_video)
             final_ref_stream_idx = find_audio_stream_index_by_lang(temp_ref_streams, args.ref_lang)
 
+        is_mkv_output = args.output_video.lower().endswith(('.mkv', '.mka', '.mks'))
         if final_ref_stream_idx is None:
-             # This is critical for muxing, raise error if still not found
-             raise RuntimeError("Could not determine *final* reference audio stream index for muxing.")
+            if is_mkv_output and MKVMERGE_EXEC:
+                logger.info("Reference stream index not determined, but mkvmerge will preserve all streams automatically.")
+            else:
+                raise RuntimeError("Could not determine *final* reference audio stream index for muxing.")
         else:
              logger.info(f"Determined final absolute reference stream index for muxing: {final_ref_stream_idx}")
 
@@ -2620,15 +3604,48 @@ Workflow:
                 foreign_lang=args.foreign_lang
             )
 
+        # === Stage 2.7: Sync Additional Foreign Audio Tracks ===
+        # Build the list of synced foreign tracks for muxing
+        synced_foreign_tracks_for_mux = []
+        
+        # Primary track (already synced)
+        primary_track = args.selected_foreign_tracks[0]
+        synced_foreign_tracks_for_mux.append({
+            'wav_path': args.output_audio,
+            'language': primary_track['language'],
+            'stream_idx': primary_track['stream_idx'],
+        })
+
+        # Additional tracks (if any)
+        additional_tracks = args.selected_foreign_tracks[1:]  # Everything after the primary
+        if additional_tracks and final_segment_anchors:
+            logger.info(f"\n===== Syncing {len(additional_tracks)} Additional Foreign Audio Track(s) =====")
+            for track in additional_tracks:
+                synced_wav = sync_additional_track(
+                    foreign_video=args.foreign_video,
+                    stream_idx=track['stream_idx'],
+                    final_segment_anchors=final_segment_anchors,
+                    ref_delay_s=final_ref_delay,
+                    temp_dir=temp_dir,
+                    track_label=f"{track['language']} (stream #{track['stream_idx']})"
+                )
+                if synced_wav:
+                    synced_foreign_tracks_for_mux.append({
+                        'wav_path': synced_wav,
+                        'language': track['language'],
+                        'stream_idx': track['stream_idx'],
+                    })
+                else:
+                    logger.warning(f"Failed to sync additional track #{track['stream_idx']} ({track['language']}). "
+                                 f"It will be excluded from the output.")
+
         # === Stage 3: Muxing (Now the default final step) ===
         if audio_sync_success:
-            # Pass the determined *final* absolute ref_stream_idx to the muxing function
-            muxing_success = run_muxing(args, final_ref_stream_idx, synced_subtitles)
+            # Pass all synced foreign tracks to the muxing function
+            muxing_success = run_muxing(args, final_ref_stream_idx, synced_subtitles, synced_foreign_tracks_for_mux)
             if not muxing_success:
-                # Raise error if muxing failed, as it's the primary output
                 raise RuntimeError("Muxing Stage Failed.")
         else:
-             # This case should have been caught earlier, but defensive coding
              raise RuntimeError("Audio synchronization did not complete successfully, cannot mux.")
 
     except RuntimeError as e:
@@ -2669,7 +3686,7 @@ Workflow:
 
     # --- Final Summary ---
     overall_elapsed_time = time.time() - overall_start_time
-    logger.info("\n===== \1 =====")
+    logger.info("\n===== PROCESS SUMMARY =====")
     final_exit_code = 1 # Default to error
 
     # Core success means audio sync AND muxing worked
@@ -2682,22 +3699,22 @@ Workflow:
              if os.path.exists(args.output_audio_original):
                  logger.info(f"-> Synchronized Audio Saved: {args.output_audio_original}")
              else:
-                  logger.warning(f"->Â  Expected audio file not found: {args.output_audio_original}") # Should not happen if sync succeeded
+                  logger.warning(f"-> Expected audio file not found: {args.output_audio_original}") # Should not happen if sync succeeded
 
         if args.output_csv:
             if os.path.exists(args.output_csv):
                  logger.info(f"-> Segment CSV File Written: {args.output_csv}")
             else:
-                 logger.warning(f"->Â  Expected CSV file not found: {args.output_csv}") # Might happen if writing failed but process continued
+                 logger.warning(f"-> Expected CSV file not found: {args.output_csv}") # Might happen if writing failed but process continued
 
         if args.qc_output_dir:
              if os.path.isdir(args.qc_output_dir):
                  logger.info(f"-> QC Image Directory:       {args.qc_output_dir}")
              else:
-                 logger.warning(f"->Â  Expected QC directory not found: {args.qc_output_dir}")
+                 logger.warning(f"-> Expected QC directory not found: {args.qc_output_dir}")
 
         logger.info(f"Total time elapsed  : {overall_elapsed_time:.1f}s")
-        logger.info("===== \1 =====")
+        logger.info("===== AVSync Completed Successfully =====")
         final_exit_code = 0 # Success
 
     else:
@@ -2709,7 +3726,7 @@ Workflow:
 
         logger.error("\nScript failed during processing.")
         logger.info(f"Total Elapsed Time: {overall_elapsed_time:.2f} seconds")
-        logger.info("===== \1 =====")
+        logger.info("===== AVSync Failed =====")
         final_exit_code = 1 # Error
 
     sys.exit(final_exit_code)

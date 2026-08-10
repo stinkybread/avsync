@@ -7,7 +7,7 @@ from typing import List
 
 # --- Configuration ---
 # The name of the main script to be called.
-AVSYNC_SCRIPT_NAME = "AVSync_v12.py"
+AVSYNC_SCRIPT_NAME = "AVSync_v14.py"
 
 # A tuple of common video file extensions to look for (case-insensitive).
 VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.mov', '.ts', '.webm')
@@ -27,7 +27,7 @@ def run_sync_process(command: List[str]) -> bool:
             print(f"  -> ERROR: Process failed with exit code {result.returncode}.")
             return False
     except FileNotFoundError:
-        print(f"  -> FATAL ERROR: Could not find the script '{AVSYNC_SCRIPT_NAME}'. Make sure it's in the same directory.")
+        print(f"  -> FATAL ERROR: Could not find the script '{AVSYNC_SCRIPT_NAME}'. Check that the main script path is correct.")
         return False
     except Exception as e:
         print(f"  -> An unexpected error occurred while running the subprocess: {e}")
@@ -35,7 +35,7 @@ def run_sync_process(command: List[str]) -> bool:
 
 def parse_file_list(file_list, list_type = ""):
     """
-    Parser that creates a ditionary {EpisodeId:Filename} from list of filenames.
+    Parser that creates a dictionary {EpisodeId:Filename} from list of filenames.
     """
     pairs = {}
     for file in file_list:
@@ -60,22 +60,22 @@ def main():
 Example Usage:
 
 # Basic usage (will skip files that already exist in the output folder):
-python AVSync_batch.py "C:\\path\\to\\ref_videos" "C:\\path\\to\\foreign_videos" "C:\\path\\to\\output"
+python AVSync_batch_regex.py "C:\\path\\to\\ref_videos" "C:\\path\\to\\foreign_videos" "C:\\path\\to\\output"
 
 # This version of script matches video files NOT based on name but episode and season number S00E00 using regex.
 
 # Force overwrite of existing files in the output folder:
-python AVSync_batch.py ./ref ./foreign ./output --overwrite
+python AVSync_batch_regex.py ./ref ./foreign ./output --overwrite
 
-# With pass-through arguments for AVSync_v13.py:
+# With pass-through arguments for AVSync_v14.py:
 # (All arguments after the three folders are passed directly to the main script)
-python AVSync_batch.py ./ref ./foreign ./output --ref_lang eng --foreign_lang hin --foreign_tracks all
+python AVSync_batch_regex.py ./ref ./foreign ./output --ref_lang eng --foreign_lang hin --foreign_tracks all
 
 # Sync all foreign audio tracks with QC images:
-python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all --qc_output_dir ./qc_images
+python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all --qc_output_dir ./qc_images
 
 # Note: --auto_detect is always injected in batch mode to skip interactive prompts.
-# A valid --foreign_lang is REQUIRED in batch mode (v13 enforces language metadata).
+# A valid --foreign_lang is REQUIRED in batch mode (v14 enforces language metadata).
 # If the foreign files have proper language tags in metadata, they will be used automatically.
 
 # It is recommended to use quotes around paths, especially if they contain spaces.
@@ -98,11 +98,18 @@ python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tra
     # --- 1. Initial Validation ---
     print("--- AVSync Batch Processor ---")
 
-    # Check if the main script exists in the current directory
-    if not os.path.isfile(AVSYNC_SCRIPT_NAME):
-        print(f"\nFATAL ERROR: The main script '{AVSYNC_SCRIPT_NAME}' was not found.")
-        print(f"Please ensure 'AVSync_batch_plus.py' is in the same directory as '{AVSYNC_SCRIPT_NAME}'.")
-        sys.exit(1)
+    # Resolve the main script relative to this batch script (not just CWD)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    avsync_script_path = os.path.join(script_dir, AVSYNC_SCRIPT_NAME)
+    if not os.path.isfile(avsync_script_path):
+        # Fallback: try current working directory
+        avsync_script_path = os.path.abspath(AVSYNC_SCRIPT_NAME)
+        if not os.path.isfile(avsync_script_path):
+            print(f"\nFATAL ERROR: The main script '{AVSYNC_SCRIPT_NAME}' was not found.")
+            print(f"Looked in: {script_dir}")
+            print(f"Also tried: {os.getcwd()}")
+            print(f"Please place '{AVSYNC_SCRIPT_NAME}' next to this batch script or in the current directory.")
+            sys.exit(1)
 
     # Validate input directories
     if not os.path.isdir(args.ref_dir):
@@ -151,28 +158,40 @@ python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tra
         print(f"\nFATAL ERROR: Could not read foreign directory: {e}")
         sys.exit(1)
         
-    if not ref_files:
+    if not for_files:
         print("No video files found in the foreign directory. Exiting.")
         sys.exit(0)
 
     ref_dict = parse_file_list(ref_files, "reference")
-    # print(ref_dict)
-
     for_dict = parse_file_list(for_files, "foreign")
-    # print(for_dict)
 
-    # Create a set of all EpisodeIds that were found both in reference and foreign dir.     
+    # Files that contained an SxxExx code
+    ref_with_id = len(ref_dict)
+    for_with_id = len(for_dict)
+
+    # Files that had no recognizable SxxExx code (silently ignored by the parser)
+    ref_no_id = len(ref_files) - ref_with_id
+    for_no_id = len(for_files) - for_with_id
+
+    # Intersection = pairs we can process
     pairs = set(ref_dict.keys()) & set(for_dict.keys())
+    unmatched_ref = sorted(set(ref_dict.keys()) - set(for_dict.keys()))
+    unmatched_for = sorted(set(for_dict.keys()) - set(ref_dict.keys()))
 
-    print(f"Found {len(pairs)} video pairs to sync.")
+    print(f"Reference videos with SxxExx: {ref_with_id}  (ignored {ref_no_id} without episode code)")
+    print(f"Foreign videos with SxxExx:   {for_with_id}  (ignored {for_no_id} without episode code)")
+    print(f"Matched pairs:                {len(pairs)}")
+    if unmatched_ref:
+        print(f"  Unmatched reference episodes: {', '.join(unmatched_ref)}")
+    if unmatched_for:
+        print(f"  Unmatched foreign episodes:   {', '.join(unmatched_for)}")
 
     # --- 3. Process Each Matched Pair ---
     print("\n--- Starting Batch Processing ---")
     
     success_count = 0
-    skipped_count = len(ref_files) - len(pairs)
     failed_count = 0
-    skipped_existing_count = 0 # New counter for clarity
+    skipped_existing_count = 0
 
     for i, pair_id in enumerate(sorted(pairs), 1):
         print(f"\n[{i}/{len(pairs)}] Processing: {pair_id}")
@@ -187,12 +206,12 @@ python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tra
             skipped_existing_count += 1
             continue
         
-        # Construct the command to run AVSync_v13.py
+        # Construct the command to run AVSync_v14.py
         # Using sys.executable ensures the same python interpreter is used
         # --auto_detect is injected to ensure non-interactive batch operation
         command = [
             sys.executable,
-            AVSYNC_SCRIPT_NAME,
+            avsync_script_path,
             ref_path,
             foreign_path,
             output_path,
@@ -211,8 +230,9 @@ python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tra
     print("--- Batch Processing Complete ---")
     print(f"  Successfully processed: {success_count}")
     print(f"  Failed:                 {failed_count}")
-    print(f"  Skipped (no match):     {skipped_count}")
     print(f"  Skipped (already done): {skipped_existing_count}")
+    print(f"  Unmatched ref episodes: {len(unmatched_ref)}")
+    print(f"  Unmatched for episodes: {len(unmatched_for)}")
     print("="*30)
     
     if failed_count > 0:
