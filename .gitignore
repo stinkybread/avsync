@@ -1,0 +1,4 @@
+__pycache__/
+.avsync_cache/
+avsync_gui_settings.json
+*_avsync.log

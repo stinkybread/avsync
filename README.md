@@ -1,117 +1,186 @@
-# AVSync v14 — Audio/Video Synchronization Engine
+# AVSync — Audio/Video Synchronization Engine
 
-![Python](https://img.shields.io/badge/Python-3.8+-yellow.svg)
+![Python](https://img.shields.io/badge/Python-3.9+-yellow.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-A command-line tool that synchronizes a **foreign-language audio track** to a **reference video** using visual anchor detection and precise per-segment audio timing. It aligns dubbed audio (and subtitles) from one release to the exact timeline of another, then muxes a clean output that preserves all of the reference video's original content.
+AVSync retimes a **foreign-language audio track** (and its subtitles) to the exact timeline of a **reference video**. It finds matching frames in both videos, stretches each foreign segment to the length of the matching reference segment, and muxes a clean output that keeps everything from the reference release.
 
-Typical use case: you have an English reference release with correct timing, and a foreign release (e.g. Japanese or French) whose audio you want retimed to match the reference video frame-for-frame.
+Typical use: you have a release with the picture and timing you want (e.g. an English Blu-ray) and another release with the dub you want (e.g. a Hindi or Japanese TV rip). AVSync puts the dub on the good release, frame-accurate.
 
-## How It Works
+**Current version: 18.1** — desktop GUI, batch mode, uniform sampling, post-mux extraction, aspect-ratio-aware matching and bounded memory use. See [What's new](#whats-new).
 
-1. **Image Pairing** — Scene-change frames are extracted from both videos with FFmpeg, then matched via OpenCV template matching (`TM_CCOEFF_NORMED`) to build a set of visual anchors linking the two timelines.
-2. **Audio Synchronization** — The foreign audio is split into segments defined by the anchors. Each segment is time-stretched (`atempo`) so its duration matches the corresponding reference segment, then concatenated and padded to align with the reference start.
-3. **Subtitle Synchronization** — Text subtitles are retimed with the same per-segment stretch as the audio. Bitmap subtitles are passed through unchanged (see below).
-4. **Muxing** — The reference video, its original audio, the synced foreign track(s), and subtitles are combined into the final file. On MKV, `mkvmerge` is used so all original streams, chapters, fonts, and metadata are preserved untouched.
+## Files
 
-## What's New in v14
+| File | Purpose |
+|---|---|
+| `AVSync.py` | The engine (command line) |
+| `AVSync_GUI.py` | Desktop GUI (Tkinter, no extra packages) — single files and batch |
+| `AVSync_batch.py` | Batch runner: pairs two folders by `SxxExx` episode code |
 
-- **Anchor-and-follow frame matching.** The first frame is located with a wide search window (±6% of reference duration) to establish an anchor. Every subsequent frame is then searched only in a narrow window **0 to +10 seconds forward** of its estimated position (derived from the anchor offset). Combined with a foreign-frame cache and lower match resolution, this is dramatically faster than the previous fixed-window scan.
-- **Lower template-match resolution (640×360).** Frames are compared at half the previous resolution. Whole-frame scene matching is unaffected in accuracy but much faster.
-- **Native ASS/SSA subtitle preservation.** Styled subtitles keep their fonts, colors, positioning, and inline tags. Only `Dialogue:` timestamps are adjusted; the entire header, styles, and any `[Fonts]` sections are preserved verbatim. Non-ASS text subs are handled as SRT.
-- **Bitmap subtitle pass-through (PGS / VobSub).** Image-based subtitles (`hdmv_pgs_subtitle`, `dvd_subtitle`, etc.) cannot be text-parsed or retimed. They are now copied through into the output unchanged, with a clear log warning that their timing matches the foreign source rather than the adjusted audio.
-- **Visible dropped-subtitle logging.** Any subtitle falling outside the anchored segment range is logged individually — with its index, timestamps, a text preview, and the specific reason (before the first boundary, after the last, or in a gap) — instead of being silently discarded.
-
-### Maintenance / Bugfixes (post-v14 QC)
-
-- Fixed broken stage-header log messages (control-character placeholders).
-- Fixed ffmpeg concat demuxer path resolution (absolute paths are now used so processing no longer depends on the process working directory).
-- Cache checkpoint version bumped to 14 for compatibility.
-- Batch script: fixed a copy-paste bug that prevented detection of an empty foreign directory; improved episode-code matching diagnostics; the main engine is now located relative to the batch script itself.
+Keep the three files in the same folder.
 
 ## Requirements
 
-- **Python** 3.8+
-- **FFmpeg** and **FFprobe** (full build with SoxR recommended for high-quality resampling)
-- **MKVToolNix** (`mkvmerge`) for MKV muxing
-- Python packages: see `requirements.txt` (OpenCV, NumPy, SciPy, tqdm; optional `imagehash` + `Pillow` for similarity filtering)
+- **Python 3.9+** (tested on 3.12 and 3.13)
+- **FFmpeg + FFprobe** on `PATH` — a full build with SoxR is recommended. FFmpeg 5.1+ is preferred; older builds still work.
+- **MKVToolNix** (`mkvmerge`) — optional but recommended for MKV output; it preserves chapters, fonts and attachments untouched. Without it, FFmpeg is used for muxing. The GUI can locate or help install it.
+- Python packages:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-FFmpeg full builds: https://ffbinaries.com/downloads · MKVToolNix: https://mkvtoolnix.download/
+FFmpeg builds: https://ffbinaries.com/downloads · MKVToolNix: https://mkvtoolnix.download/
 
-## Usage
+## Quick start
 
-### Single pair
-
-```bash
-python AVSync_v14.py "reference.mkv" "foreign.mkv" "output.mkv"
-```
-
-You'll be prompted to pick reference and foreign audio streams. Pass `--auto_detect` to skip the prompts and select streams by language automatically.
+### GUI
 
 ```bash
-python AVSync_v14.py ref.mkv foreign.mkv out.mkv \
-    --ref_lang eng --foreign_lang jpn --auto_detect
+python AVSync_GUI.py
 ```
 
-### Batch (match by SxxExx episode code)
+Pick the reference video, the foreign video and an output path on **Quick Start**, set the foreign language code (e.g. `hin`, `jpn`, `spa`), and press **Run Sync**. Every engine option is available on the other tabs with tooltips, and **Preview Command** prints the equivalent command line. Settings are remembered between sessions.
 
-`AVSync_batch.py` pairs files across two folders by their `SxxExx` season/episode code (case-insensitive) rather than exact filename, then runs the engine on each pair. `--auto_detect` is injected automatically.
+The **Batch** tab syncs whole folders: episodes are paired by their `S01E05`-style code, **Preview Pairs** shows the pairing before you start, and episodes that already have an output are skipped unless you tick re-process.
+
+### Command line
+
+```bash
+python AVSync.py reference.mkv foreign.mkv output.mkv --ref_lang eng --foreign_lang jpn --auto_detect
+```
+
+Without `--auto_detect` you are asked which audio streams to use (when there's no console, e.g. from the GUI, auto-detection is used).
+
+### Batch
 
 ```bash
 python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all
 ```
 
-- Skips outputs that already exist unless `--overwrite` is given.
-- All arguments after the three folders are passed straight through to `AVSync_v14.py`.
-- A valid `--foreign_lang` is required in batch mode (the engine needs it for metadata tagging).
+- Files are paired by `SxxExx` (case-insensitive), so the rest of the names can differ.
+- Any option after the three folders is passed through to the engine; `--auto_detect` is added automatically.
+- Existing outputs are skipped unless `--overwrite` is given. A real `--foreign_lang` is required.
+- `--engine PATH` points at an engine elsewhere.
 
-## Key Options
+## How it works
+
+1. **Image pairing** — Scene-change frames are extracted from both videos and matched with OpenCV template matching to create visual anchors linking the two timelines. The default *anchor-and-follow* search locks onto the first match, then looks only a few seconds ahead of the expected position for each next match, which is fast and resistant to false matches.
+2. **Optional extra anchors** — Forced sync points you give by hand, and/or *uniform sampling* that adds a matched anchor every N seconds where scene detection is sparse.
+3. **Audio sync** — The foreign audio is cut at the anchors; each segment is time-stretched (`atempo`, refined iteratively to within a few ms) to the length of its reference segment, then joined and padded to the reference start.
+4. **Subtitles** — Text subtitles get the same per-segment retiming. Bitmap subtitles are passed through.
+5. **Muxing** — The reference file plus the synced track(s) and subtitles, tagged with language codes.
+6. **Optional post-mux extraction** — Save the synced tracks as separate files (and optionally drop the muxed video).
+
+## Options
+
+### Core
 
 | Option | Default | Description |
 |---|---|---|
-| `--ref_lang` / `--foreign_lang` | `eng` / `foreign` | ISO 639-2 language codes (e.g. `eng`, `jpn`, `fre`, `hin`) |
-| `--auto_detect` | off | Skip interactive prompts; select streams by language |
-| `--foreign_tracks` | primary | `primary`, `all`, or comma-separated stream indices to sync |
-| `--scene_threshold` | `0.25` | Scene-change sensitivity for frame extraction (0.0–1.0) |
-| `--match_threshold` | `0.7` | Template-match acceptance threshold (0.0–1.0) |
-| `--similarity_threshold` | `4` | Perceptual-hash dedup distance (`-1` to disable) |
-| `--db_threshold` | `-40.0` | Audio content detection threshold in dB |
-| `--min_segment_duration` | `5.0` | Minimum reference segment length in seconds |
-| `--first_segment_adjust` / `--last_segment_adjust` | `0.0` | Manual timing nudge in **milliseconds** for the first/last segment |
-| `--force_sync_points` | none | Manual anchor points for problem sections |
-| `--mux_foreign_codec` / `--mux_foreign_bitrate` | `aac` / `192k` | Output codec/bitrate for synced foreign audio |
-| `--no_subtitles` | off | Skip subtitle handling entirely |
-| `--qc_output_dir` | none | Write side-by-side QC comparison images |
-| `--output_csv` | none | Write an anchor/segment report |
-| `--verbose` | off | Show DEBUG-level detail |
+| `--ref_lang` / `--foreign_lang` | `eng` / — | ISO 639-2 codes (`eng`, `jpn`, `hin`, `spa`…). A real foreign code is needed for tagging. |
+| `--auto_detect` | off | Pick audio streams by language without prompting |
+| `--foreign_tracks` | primary | `primary`, `all`, or absolute stream numbers like `1,2` |
+| `--ref_stream_idx` / `--foreign_stream_idx` | auto | Force specific audio streams |
+| `--no_subtitles` | off | Skip subtitles |
+| `--output_audio` / `--output_csv` / `--qc_output_dir` | none | Also save the synced WAV, a segment report, side-by-side QC images |
 
-## Subtitle Behavior at a Glance
+### Matching
 
-| Source format | Handling | Timing adjusted? |
+| Option | Default | Description |
 |---|---|---|
-| SRT / SubRip | Parsed, retimed, written as SRT | Yes |
-| ASS / SSA | Parsed natively, styles preserved, retimed | Yes (timestamps only) |
-| PGS (`hdmv_pgs_subtitle`) | Passed through unchanged | No — matches foreign source |
-| VobSub (`dvd_subtitle`) | Passed through unchanged | No — matches foreign source |
+| `--scene_threshold` | `0.25` | Scene-change sensitivity (lower = more frames) |
+| `--match_threshold` | `0.7` | Template-match score needed to accept a pair |
+| `--similarity_threshold` | `4` | pHash filter for near-duplicate reference frames (`-1` disables) |
+| `--use_precise_sync` | off | Score every foreign frame within ±6% of the duration and keep the best, instead of anchor-and-follow. Slower; can help when many shots look alike. |
+| `--match_keep_aspect` | off | Compare frames at the same height without stretching — use when aspect ratios differ (e.g. a cropped 4:3 dub vs a 16:9 HD release) |
+| `--force_sync_points` | none | Manual anchors: `HH:MM:SS:MS>HH:MM:SS:MS,…` (reference > foreign) |
+| `--force_sync_only` | off | Use only the forced points; skip scene matching |
+| `--uniform_sample_interval` | `0` (off) | Add a matched anchor every N seconds. 60–120 s is a good start; go lower for content that drifts. |
+| `--uniform_match_threshold` / `--uniform_crop_center` | `0.7` / `0.7` | Match score and centre-crop fraction for uniform samples |
+| `--uniform_ref_aspect_ratio` / `--uniform_foreign_aspect_ratio` | none | Force an aspect ratio (e.g. `4:3`) for uniform-sample frames |
+| `--uniform_min_variance` / `--uniform_min_blur` / `--uniform_min_edges` | `150` / `40` / `300` | Quality gate that rejects blank, blurry or featureless sample frames |
 
-Subtitles that fall outside the anchored segment range are dropped and logged individually with a reason.
+### Audio timing
 
-## Tips for Best Results
+| Option | Default | Description |
+|---|---|---|
+| `--db_threshold` | `-40.0` | Level that counts as content when finding where audio starts and ends |
+| `--min_segment_duration` | `5.0` | Shortest reference segment kept (seconds) |
+| `--first_segment_adjust` / `--last_segment_adjust` | `0` | Nudge the first/last segment in **milliseconds** (+ pads, − trims) |
 
-- Both videos should contain essentially the same scenes. Different intros, ads, or missing scenes will reduce anchor quality.
-- If no matches are found, lower `--scene_threshold` (e.g. `0.15`) and/or `--match_threshold` (e.g. `0.6`).
-- Uniform, clear scene changes give the most reliable anchors.
-- Use `--force_sync_points` for sections that consistently misalign.
+### Output
+
+| Option | Default | Description |
+|---|---|---|
+| `--mux_foreign_codec` / `--mux_foreign_bitrate` | `aac` / `192k` | Codec/bitrate of the synced track (`copy` keeps PCM) |
+| `--clean_track_names` | off | Clear track titles so players show "Track N – Language" |
+| `--extract_synced_audio` | off | Also write the synced audio as `<output>.<lang>.<ext>` next to the output |
+| `--extract_synced_subtitles` | off | Also write the synced subtitles (`.srt`, `.ass`, `.sup`) |
+| `--delete_output_after_extract` | off | Keep only the extracted files. Useful for Jellyfin/Plex: the original media stays untouched, so trickplay and intro detection aren't redone. |
+
+### Performance
+
+| Option | Default | Description |
+|---|---|---|
+| `--use-cache` / `--no-cache` | on | Reuse visual anchors between runs on the same files. Timing-only changes (segment adjustments) don't invalidate the cache. |
+| `--low-memory` | off | Smaller frame cache (64 MB) and at most 2 threads, for very large sources on low-RAM machines |
+| `--max-workers N` | auto | Cap FFmpeg/OpenCV threads |
+| `--verbose`, `--show-warnings`, `--log-file`, `--no-log` | — | Console detail and log file control (a full log is written next to the output by default) |
+
+Run `python AVSync.py -h` for the complete list.
+
+## Subtitles
+
+| Source format | Handling | Retimed? |
+|---|---|---|
+| SRT | Parsed and retimed | Yes |
+| ASS / SSA | Retimed natively; styles, fonts and tags preserved | Yes (timestamps only) |
+| PGS (`hdmv_pgs_subtitle`), VobSub | Copied through unchanged | No — keeps the foreign timing |
+
+Subtitles outside the anchored range are dropped and each one is logged with the reason.
+
+## Tips
+
+- Both videos should contain the same scenes; extra intros or recaps are fine, missing scenes reduce anchors.
+- No or few matches: lower `--scene_threshold` (e.g. `0.15`) and/or `--match_threshold` (e.g. `0.6`). If the two releases have different aspect ratios, try `--match_keep_aspect`.
+- Drift between scene changes: enable uniform sampling.
+- A stubborn section: add `--force_sync_points` there.
+- Check results quickly with `--qc_output_dir` and `--output_csv`.
+
+## What's new
+
+**18.1**
+- Post-mux extraction of synced audio/subtitles, with optional deletion of the muxed file
+- `--match_keep_aspect` for releases with different aspect ratios
+- `--use_precise_sync` brings back exhaustive best-match pairing as an option
+- Bounded memory: audio analysis streams the WAV, foreign frames load into a size-limited cache, FFmpeg logs spool to disk, and WAV intermediates over 4 GB (RF64) work. New `--low-memory`, `--max-workers` and `--force_sync_only`.
+- Uses `-fps_mode` instead of the deprecated `-vsync` (falls back automatically on old FFmpeg)
+- FFmpeg muxing no longer retags the reference's own subtitle tracks with the foreign language
+
+**18**
+- Desktop GUI with batch mode
+- Uniform sampling for full-timeline anchors, with aspect-ratio forcing and frame quality gates
+- `--clean_track_names`
+- `mkvmerge` is optional (FFmpeg fallback)
+- Non-interactive runs fall back to auto-detection instead of waiting for input
+
+**14**
+- Anchor-and-follow matching
+- Native ASS/SSA retiming
+- PGS/VobSub pass-through
+- Logging of dropped subtitles
+
+## Credits
+
+- **Developer:** [Vaibhav Bhat](https://github.com/stinkybread)
+- **GUI:** original GUI shell by **uruseiyatsura** (Discord)
+- **[NP-Gaming](https://github.com/NP-Gaming):** post-mux extraction, precise matching and aspect-ratio-aware matching ([#8](https://github.com/stinkybread/avsync/pull/8))
+- **[xsoulp](https://github.com/xsoulp):** bounded-memory audio analysis and frame caching, RF64 support, forced-anchor-only mode ([#9](https://github.com/stinkybread/avsync/pull/9))
+- **[Ethan-BB](https://github.com/Ethan-BB):** `-vsync` deprecation report ([#5](https://github.com/stinkybread/avsync/issues/5))
+
+Built with FFmpeg, OpenCV, SciPy and MKVToolNix.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-## Credits
-**Shout-Outs** [NP-Gaming]((https://github.com/NP-Gaming)
-**Developer:** [Vaibhav Bhat](https://github.com/stinkybread)
-Built with FFmpeg, OpenCV, SciPy, and MKVToolNix.
