@@ -4,13 +4,14 @@ import shutil
 import subprocess
 from tqdm import tqdm
 import glob
-import concurrent.futures
 import numpy as np
 import argparse
 import re
 import tempfile
 import sys
-from scipy.io import wavfile
+from avsync_memory import audio_boundaries, FrameCache
+from collections import deque
+from functools import wraps
 import time
 import json
 import logging
@@ -19,6 +20,82 @@ import platform
 import ctypes
 import pickle
 import hashlib
+
+# Native work is sequential; cap internal codec/OpenCV parallelism as well.
+MAX_WORKERS = 2
+LOW_MEMORY = False
+AUDIO_CHUNK_SECONDS = 1.0
+PROFILE_MEMORY = False
+
+
+def log_memory(stage):
+    """Optional RSS logging; psutil is never required for normal execution."""
+    if not PROFILE_MEMORY:
+        return
+    current = peak = children = 'unavailable'
+    try:
+        import psutil
+        process = psutil.Process()
+        current = f'{process.memory_info().rss / 2**20:.1f}'
+        child_rss = 0
+        for child in process.children(recursive=True):
+            try:
+                child_rss += child.memory_info().rss
+            except psutil.Error:
+                pass  # A codec process may exit between enumeration and read.
+        children = f'{child_rss / 2**20:.1f}'
+    except (ImportError, OSError, RuntimeError):
+        # Linux fallback without a new mandatory dependency.
+        try:
+            with open('/proc/self/status') as status:
+                fields = dict(line.split(':', 1) for line in status if ':' in line)
+            current = f'{int(fields["VmRSS"].split()[0]) / 1024:.1f}'
+        except (OSError, KeyError, ValueError):
+            pass
+    try:
+        import resource
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak = f'{rss / (2**20 if sys.platform == "darwin" else 1024):.1f}'
+    except (ImportError, OSError):
+        pass
+    logger.info(f'[MEMORY] {stage}: RSS={current} MiB, peak RSS={peak} MiB, live children RSS={children} MiB')
+
+
+def memory_stage(function):
+    @wraps(function)
+    def measured(*args, **kwargs):
+        log_memory(function.__name__ + ' begin')
+        try:
+            return function(*args, **kwargs)
+        finally:
+            log_memory(function.__name__ + ' end')
+    return measured
+
+
+def positive_int(value):
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError('must be positive')
+    return number
+
+
+def positive_seconds(value):
+    number = float(value)
+    if not np.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError('must be finite and positive')
+    return number
+
+
+def audio_extraction_filter():
+    """Keep extracted sample positions on the video timeline.
+
+    WAV has no packet timestamps. Pad delayed starts and timestamp gaps before
+    writing it, so video anchors and audio sample indices share an origin.
+    async=1 fills/trims discontinuities without continuous tempo compensation.
+    """
+    cutoff = 0.99 if DEFAULT_SAMPLE_RATE >= 44100 else 0.90
+    return (f'aresample=resampler=soxr:precision=28:cutoff={cutoff}'
+            ':async=1:first_pts=0')
 
 # --- DUAL LOGGING SYSTEM ---
 # File logger: detailed output to log file
@@ -482,6 +559,7 @@ def find_executable(name):
         logger.error(f"'{name}' command not found in system PATH.")
         return None
 
+@memory_stage
 def run_ffmpeg(cmd_list, desc="FFmpeg Task", verbose_success=False, capture_stderr=False):
     """Runs an FFmpeg command with logging and error handling."""
     global FFMPEG_EXEC
@@ -493,15 +571,35 @@ def run_ffmpeg(cmd_list, desc="FFmpeg Task", verbose_success=False, capture_stde
     start_time = time.time()
     stderr_output = ""
     try:
-        # Use Popen for better handling of large stderr, prevent potential deadlocks
-        process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, encoding='utf-8', errors='ignore', startupinfo=None)
-        stdout, stderr = process.communicate() # Wait for process to finish
-        returncode = process.returncode
+        # Bound codec/filter threads on both sides of every input. Keep output
+        # formats, filters and synchronization parameters exactly as specified.
+        cmd_list = list(cmd_list)
+        for index in reversed([i for i, arg in enumerate(cmd_list) if arg == '-i']):
+            cmd_list[index:index] = ['-threads', str(MAX_WORKERS)]
+        cmd_list[1:1] = ['-filter_threads', str(MAX_WORKERS),
+                         '-filter_complex_threads', str(MAX_WORKERS)]
+        cmd_list[-1:-1] = ['-threads', str(MAX_WORKERS)]
+        if str(cmd_list[-1]).lower().endswith('.wav'):
+            # RF64 is needed once an intermediate exceeds the RIFF 4 GiB limit.
+            cmd_list[-1:-1] = ['-rf64', 'auto']
+        # Diagnostics can grow for hours (notably showinfo and -stats). Spool
+        # them to disk, retaining only a tail and requested scene timestamps.
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='ignore') as diagnostics:
+            process = subprocess.Popen(cmd_list, stdout=subprocess.DEVNULL,
+                                       stderr=diagnostics, startupinfo=None)
+            returncode = process.wait()
+            diagnostics.seek(0)
+            tail = deque(maxlen=20)
+            captured = []
+            for line in diagnostics:
+                tail.append(line.rstrip())
+                if capture_stderr and '[Parsed_showinfo' in line and 'pts_time:' in line:
+                    captured.append(line)
+                if verbose_success and 'warning' in line.lower():
+                    logger.warning(line.rstrip())
+            stderr = '\n'.join(tail)
+            stderr_output = ''.join(captured) if capture_stderr else ''
         elapsed_time = time.time() - start_time
-
-        if capture_stderr:
-            stderr_output = stderr
 
         if returncode != 0:
             logger.error(f"\nERROR: {desc} failed! (Exit code: {returncode}, Time: {elapsed_time:.2f}s)")
@@ -516,10 +614,6 @@ def run_ffmpeg(cmd_list, desc="FFmpeg Task", verbose_success=False, capture_stde
             return False, stderr_output if capture_stderr else False
         else:
             logger.info(f"  -> Completed: {desc} (Time: {elapsed_time:.2f}s)")
-            if verbose_success and stderr:
-                 warnings = [line for line in stderr.splitlines() if 'warning' in line.lower()]
-                 if warnings:
-                      logger.warning(f"FFmpeg warnings during {desc}:\n" + "\n".join(warnings))
             return True, stderr_output if capture_stderr else True
     except FileNotFoundError:
         logger.error(f"'{cmd_list[0]}' not found. Check installation/PATH.")
@@ -606,20 +700,18 @@ def run_mkvmerge(cmd_list, desc="MKVMerge Task"):
     logger.info(f"  -> Running: {desc}...")
     start_time = time.time()
     try:
-        process = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, encoding='utf-8', errors='ignore')
-        stdout, stderr = process.communicate()
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='ignore') as diagnostics:
+            process = subprocess.Popen(cmd_list, stdout=diagnostics, stderr=subprocess.STDOUT)
+            process.wait()
+            diagnostics.seek(0)
+            output_tail = deque(diagnostics, maxlen=20)
         elapsed_time = time.time() - start_time
 
         # mkvmerge exit codes: 0=success, 1=warnings, 2=error
         if process.returncode >= 2:
             logger.error(f"\nERROR: {desc} failed! (Exit code: {process.returncode}, Time: {elapsed_time:.2f}s)")
             logger.error(f"  mkvmerge Command: {' '.join(cmd_list)}")
-            output_lines = (stdout + stderr).strip().splitlines()
-            max_lines = 20
-            log_output = "\n".join(output_lines[-max_lines:])
-            if len(output_lines) > max_lines:
-                log_output = f"(Showing last {max_lines} lines)\n" + log_output
+            log_output = ''.join(output_tail).strip()
             logger.error(f"  mkvmerge Output:\n{log_output}")
             return False
         else:
@@ -928,6 +1020,7 @@ def parse_foreign_tracks_arg(foreign_tracks_str, video_path, primary_stream_idx=
     return selected
 
 
+@memory_stage
 def sync_additional_track(foreign_video, stream_idx, final_segment_anchors, ref_delay_s,
                           temp_dir, track_label="additional"):
     """
@@ -961,7 +1054,7 @@ def sync_additional_track(foreign_video, stream_idx, final_segment_anchors, ref_
     
     # Step 1: Extract the additional track to WAV
     foreign_wav_full = os.path.join(track_temp_dir, f"foreign_full_{stream_idx}.wav")
-    aresample_filter = f'aresample=resampler=soxr:precision=28:cutoff={0.99 if DEFAULT_SAMPLE_RATE >= 44100 else 0.90}'
+    aresample_filter = audio_extraction_filter()
     
     extract_cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats",
@@ -1123,6 +1216,7 @@ def get_file_duration(file_path, media_type='audio'):
         return None
 
 # --- Image Pairing Stage Functions ---
+@memory_stage
 def extract_frames_ffmpeg(video_path, output_folder, scene_threshold):
     """Extracts scene change frames using FFmpeg's scene detection."""
     os.makedirs(output_folder, exist_ok=True)
@@ -1190,6 +1284,7 @@ def process_image_pair_for_match(ref_img_name, foreign_image_list, ref_extract_f
         if ref_frame_orig is None:
             logger.warning(f"Could not read reference image: {ref_img_name}"); return None
         ref_frame_comp = cv2.resize(ref_frame_orig, (RESIZE_WIDTH, RESIZE_HEIGHT), interpolation=cv2.INTER_AREA)
+        del ref_frame_orig
         if ref_frame_comp is None or ref_frame_comp.size == 0:
              logger.warning(f"Failed to resize reference image: {ref_img_name}"); return None
     except Exception as e:
@@ -1206,6 +1301,7 @@ def process_image_pair_for_match(ref_img_name, foreign_image_list, ref_extract_f
             foreign_frame_orig = cv2.imread(foreign_img_path, cv2.IMREAD_GRAYSCALE)
             if foreign_frame_orig is None: continue # Skip if image can't be read
             foreign_frame_comp = cv2.resize(foreign_frame_orig, (RESIZE_WIDTH, RESIZE_HEIGHT), interpolation=cv2.INTER_AREA)
+            del foreign_frame_orig
             if foreign_frame_comp is None or foreign_frame_comp.size == 0: continue # Skip if resize fails
 
             # Perform template matching
@@ -1384,6 +1480,7 @@ def filter_temporal_inconsistency(matches_after_similarity):
     return filtered_list
 
 
+@memory_stage
 def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_threshold, match_threshold, similarity_threshold):
     """Orchestrates the entire image pairing stage."""
     logger.info("\n===== Image Pairing Stage =====")
@@ -1425,26 +1522,10 @@ def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_
         return None
     logger.info(f"  -> Mapped {len(ref_timestamps_dict)} reference and {len(foreign_timestamps_dict)} foreign timestamps.")
 
-    # --- Step 2.5: Pre-cache all foreign frames (read + resize once) ---
-    logger.info("--- Pre-caching Foreign Frames ---")
-    foreign_frame_cache = {}  # {filename: resized_grayscale_ndarray}
-    cache_failures = 0
-    for f_name in tqdm(foreign_filenames, desc="  Caching Foreign Frames", unit="frame", ncols=100, leave=False):
-        f_path = os.path.join(foreign_extract_path, f_name)
-        try:
-            img = cv2.imread(f_path, cv2.IMREAD_GRAYSCALE)
-            if img is not None:
-                resized = cv2.resize(img, (RESIZE_WIDTH, RESIZE_HEIGHT), interpolation=cv2.INTER_AREA)
-                if resized is not None and resized.size > 0:
-                    foreign_frame_cache[f_name] = resized
-                else:
-                    cache_failures += 1
-            else:
-                cache_failures += 1
-        except Exception as e:
-            logger.debug(f"Failed to cache foreign frame {f_name}: {e}")
-            cache_failures += 1
-    logger.info(f"  -> Cached {len(foreign_frame_cache)} foreign frames ({cache_failures} failures)")
+    # Decode lazily, retaining only a fixed byte budget of resized frames.
+    # Candidate order and matching calculations are unchanged.
+    foreign_frame_cache = FrameCache(foreign_extract_path, RESIZE_WIDTH, RESIZE_HEIGHT,
+                                     (16 if LOW_MEMORY else 64) * 2**20)
 
     # Build sorted foreign timestamps array for fast windowing
     foreign_ts_array = np.array([foreign_timestamps_dict[fn] for fn in foreign_filenames])
@@ -1478,6 +1559,7 @@ def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_
                 skipped_count += 1
                 continue
             ref_frame_comp = cv2.resize(ref_img, (RESIZE_WIDTH, RESIZE_HEIGHT), interpolation=cv2.INTER_AREA)
+            del ref_img
             if ref_frame_comp is None or ref_frame_comp.size == 0:
                 skipped_count += 1
                 continue
@@ -1526,10 +1608,9 @@ def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_
 
         for c_name, c_ts in zip(candidate_names, candidate_ts):
             c_name_str = str(c_name)
-            if c_name_str not in foreign_frame_cache:
+            foreign_frame_comp = foreign_frame_cache.get(c_name_str)
+            if foreign_frame_comp is None:
                 continue
-
-            foreign_frame_comp = foreign_frame_cache[c_name_str]
             try:
                 result = cv2.matchTemplate(foreign_frame_comp, ref_frame_comp, cv2.TM_CCOEFF_NORMED)
                 _, maxVal, _, _ = cv2.minMaxLoc(result)
@@ -1588,83 +1669,18 @@ def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_
 
 # --- Audio Syncing Stage Functions ---
 
-def find_audio_start_end(wav_path, db_threshold):
-    """Finds the start and end times of audio content above a dB threshold in a WAV file."""
-    logger.debug(f"Analyzing audio boundaries for: {os.path.basename(wav_path)} (Threshold: {db_threshold} dB)")
+@memory_stage
+def find_audio_start_end(wav_path, db_threshold, chunk_seconds=None):
+    """Find v14 audio boundaries without duration-dependent decoded arrays."""
     try:
-        sample_rate, audio_data = wavfile.read(wav_path)
-        if audio_data.size == 0:
-            logger.warning(f"Audio data is empty for {os.path.basename(wav_path)}")
-            return 0.0, 0.0 # Return 0 duration if empty
-
-        # Normalize audio data to float range [-1.0, 1.0] for consistent thresholding
-        if np.issubdtype(audio_data.dtype, np.integer):
-            dtype_info = np.iinfo(audio_data.dtype)
-            max_val = float(dtype_info.max)
-            min_val = float(dtype_info.min)
-            # Avoid division by zero if audio is silent
-            norm_factor = max(abs(max_val), abs(min_val))
-            if norm_factor == 0: return 0.0, 0.0
-            audio_float = audio_data.astype(np.float64) / norm_factor
-        elif np.issubdtype(audio_data.dtype, np.floating):
-             audio_float = audio_data.astype(np.float64)
-             # Handle potential clipping in float audio > 1.0
-             abs_max = np.max(np.abs(audio_float)) if audio_float.size > 0 else 0.0
-             if abs_max > 1.0 and abs_max > 0:
-                 audio_float /= abs_max
-             elif abs_max == 0: # Silent float audio
-                  return 0.0, 0.0
-        else:
-             logger.error(f"Unsupported audio data type: {audio_data.dtype} in {os.path.basename(wav_path)}")
-             return None, None # Indicate error
-
-        # Convert to mono by taking the max absolute amplitude across channels if stereo
-        if audio_float.ndim > 1 and audio_float.shape[1] > 1:
-            amplitude = np.max(np.abs(audio_float), axis=1)
-        else:
-            amplitude = np.abs(audio_float.flatten())
-
-        if amplitude.size == 0: return 0.0, 0.0 # Check again after potential flattening
-
-        # Convert dB threshold to linear amplitude threshold
-        # threshold = 10^(dB/20)
-        threshold_amplitude = 10.0**(db_threshold / 20.0)
-
-        # Find indices where amplitude exceeds the threshold
-        indices_above_thresh = np.where(amplitude >= threshold_amplitude)[0]
-
-        if len(indices_above_thresh) > 0:
-            start_index = indices_above_thresh[0]
-            end_index = indices_above_thresh[-1]
-            # Calculate times in seconds
-            start_time_sec = start_index / sample_rate
-            # Add 1 sample duration to end time to include the last sample's duration
-            end_time_sec = (end_index + 1) / sample_rate
-
-            # Ensure end time is strictly after start time (handle edge cases)
-            if end_time_sec <= start_time_sec:
-                 # If difference is less than half a sample, treat as single point
-                 if abs(end_time_sec - start_time_sec) < (0.5 / sample_rate):
-                     end_time_sec = start_time_sec
-                 else: # Otherwise, force end time to be slightly after start
-                     end_time_sec = start_time_sec + (1.0 / sample_rate)
-
-            logger.debug(f"  -> Detected boundaries: {start_time_sec:.3f}s - {end_time_sec:.3f}s")
-            return start_time_sec, end_time_sec
-        else:
-            # No audio above threshold found
-            logger.warning(f"  No audio found above {db_threshold:.1f} dB threshold in {os.path.basename(wav_path)}. Returning full duration or zero.")
-            # Optionally return full duration: return 0.0, audio_data.shape[0] / sample_rate
-            # Returning zero duration seems safer if threshold is meaningful
-            return 0.0, 0.0
-
-    except FileNotFoundError:
-        logger.error(f"WAV file not found: {wav_path}")
-        return None, None
-    except Exception as e:
-        logger.error(f"ERROR processing WAV {os.path.basename(wav_path)}: {e}", exc_info=True)
+        return audio_boundaries(wav_path, db_threshold,
+                                AUDIO_CHUNK_SECONDS if chunk_seconds is None else chunk_seconds)
+    except Exception as exc:
+        logger.error(f"ERROR processing WAV {os.path.basename(wav_path)}: {exc}", exc_info=True)
         return None, None
 
+
+@memory_stage
 def process_segment_iteratively(foreign_wav_full, foreign_start, foreign_end, ref_duration, segment_num, temp_dir, max_iterations=3, target_precision_ms=5, is_first_segment=False, is_last_segment=False, first_adjust_ms=0.0, last_adjust_ms=0.0):
     """
     Processes an audio segment, iteratively adjusting 'atempo' to match a target duration precisely.
@@ -1906,6 +1922,7 @@ def process_segment_iteratively(foreign_wav_full, foreign_start, foreign_end, re
 
     logger.error(f" Segment {segment_num}: Failed to produce final segment after iterations and correction.")
     return None
+@memory_stage
 def run_progressive_sync_iterative(args, visual_anchors_details, output_audio_path, temp_dir, db_threshold, min_segment_duration):
     """
     Audio sync stage using iterative refinement for precise segment durations.
@@ -1945,7 +1962,7 @@ def run_progressive_sync_iterative(args, visual_anchors_details, output_audio_pa
     # --- Step 2: Extract Full Audio Tracks ---
     logger.info(f"--- Extracting Audio Tracks (Ref Index: {ref_stream_idx}, Foreign Index: {foreign_stream_idx}) ---")
     # Consistent resampling for quality and compatibility
-    aresample_filter = f'aresample=resampler=soxr:precision=28:cutoff={0.99 if DEFAULT_SAMPLE_RATE >= 44100 else 0.90}'
+    aresample_filter = audio_extraction_filter()
 
     extract_cmd_ref = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats",
                        "-i", args.ref_video,
@@ -2347,6 +2364,7 @@ def _create_single_qc(ref_frame_path, foreign_frame_path, qc_output_path):
         if new_w_foreign <= 0: return False # Check for invalid width
         img_foreign_resized = cv2.resize(img_foreign, (new_w_foreign, target_h), interpolation=cv2.INTER_AREA)
 
+        del img_ref, img_foreign
         # Concatenate horizontally
         qc_image = cv2.hconcat([img_ref_resized, img_foreign_resized])
 
@@ -2359,6 +2377,7 @@ def _create_single_qc(ref_frame_path, foreign_frame_path, qc_output_path):
         logger.error(f"Error creating QC image '{os.path.basename(qc_output_path)}': {e}", exc_info=True)
         return False
 
+@memory_stage
 def create_qc_images(visual_anchors_details, final_segment_anchors,
                      ref_extract_path, foreign_extract_path, qc_output_dir):
     """Generates side-by-side QC images for the anchor points used in the final segments."""
@@ -2424,6 +2443,7 @@ def create_qc_images(visual_anchors_details, final_segment_anchors,
 
 # --- Muxing Function ---
 
+@memory_stage
 def run_muxing(args, ref_stream_idx, synced_subtitles=None, synced_foreign_tracks=None):
     """
     Muxes synced foreign audio track(s) into the reference video while preserving ALL original
@@ -3056,6 +3076,7 @@ def extract_subtitle_stream(video_path, stream_idx, output_path, native_codec=Fa
 
 # ---- Main subtitle sync orchestrator ----
 
+@memory_stage
 def sync_subtitles(foreign_video, segment_anchors, ref_delay, temp_dir, foreign_lang):
     """Synchronize subtitle streams from foreign video.
     
@@ -3272,6 +3293,9 @@ Workflow:
              "In interactive mode without this flag, you will be prompted to choose.")
     audio_group.add_argument("--auto_detect", action="store_true", help="Skip audio stream selection prompts and use auto-detection.")
 
+    img_group.add_argument('--force-sync-only', action='store_true',
+                           help='Use only --force_sync_points as visual anchors; skip automatic image pairing and its cache.')
+
     # --- Muxing Arguments ---
     mux_group = parser.add_argument_group('Muxing Parameters')
     mux_group.add_argument("--mux_foreign_codec", default=DEFAULT_MUX_ACODEC, help=f"Audio codec for the synced foreign track in the muxed output (e.g., 'aac', 'ac3', 'copy'). (Default: {DEFAULT_MUX_ACODEC})")
@@ -3290,7 +3314,20 @@ Workflow:
     log_group.add_argument("--log-file", type=str, default=None, metavar="PATH", help="Custom log file path. Default: <output_name>_avsync.log")
     log_group.add_argument("--no-log", action="store_true", help="Disable file logging (console only)")
 
+    memory_group = parser.add_argument_group('Memory and Parallelism')
+    memory_group.add_argument('--low-memory', action='store_true', help='Use a smaller frame cache and at most two native workers. Audio analysis always streams.')
+    memory_group.add_argument('--max-workers', type=positive_int, default=2, metavar='N', help='Maximum OpenCV and FFmpeg threads (default: 2). Processing stages remain sequential.')
+    memory_group.add_argument('--audio-chunk-seconds', type=positive_seconds, default=1.0, metavar='N', help='Audio analysis block duration (default: 1 second).')
+    memory_group.add_argument('--profile-memory', action='store_true', help='Log current/peak RSS at processing stage boundaries; psutil is optional.')
     args = parser.parse_args()
+    if args.force_sync_only and not parse_force_sync_points(args.force_sync_points):
+        parser.error('--force-sync-only requires valid --force_sync_points')
+    global MAX_WORKERS, LOW_MEMORY, AUDIO_CHUNK_SECONDS, PROFILE_MEMORY
+    LOW_MEMORY = args.low_memory
+    MAX_WORKERS = min(args.max_workers, 2) if LOW_MEMORY else args.max_workers
+    AUDIO_CHUNK_SECONDS = args.audio_chunk_seconds
+    PROFILE_MEMORY = args.profile_memory
+    cv2.setNumThreads(MAX_WORKERS)
 
     # --- Initialize Logging ---
     log_file_path = None
@@ -3302,6 +3339,9 @@ Workflow:
     
     global logger
     logger, log_file_path = setup_logging(log_file=log_file_path, verbose=args.verbose)
+
+    logger.info(f'Memory settings: low_memory={LOW_MEMORY}, workers={MAX_WORKERS}, audio_chunk={AUDIO_CHUNK_SECONDS}s')
+    log_memory('startup')
 
     # --- Handle Temporary WAV File ---
     args.output_audio_original = args.output_audio # Store if user specified a path
@@ -3505,8 +3545,10 @@ Workflow:
 
         # === Stage 1: Image Pairing ===
         # Try to load from cache if enabled
-        visual_anchors_details = None
-        if args.use_cache:
+        visual_anchors_details = [] if args.force_sync_only else None
+        if args.force_sync_only:
+            logger.info('Using only explicit forced anchors; automatic image pairing and its cache are skipped.')
+        if args.use_cache and not args.force_sync_only:
             cache_path = get_cache_path(args)
             checkpoint = load_checkpoint(cache_path)
             if checkpoint:
