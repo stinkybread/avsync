@@ -7,7 +7,7 @@ from typing import List
 
 # --- Configuration ---
 # The name of the main script to be called.
-AVSYNC_SCRIPT_NAME = "AVSync_v14.py"
+AVSYNC_SCRIPT_NAME = "AVSync_v18.py"
 
 # A tuple of common video file extensions to look for (case-insensitive).
 VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.mov', '.ts', '.webm')
@@ -64,18 +64,24 @@ python AVSync_batch_regex.py "C:\\path\\to\\ref_videos" "C:\\path\\to\\foreign_v
 
 # This version of script matches video files NOT based on name but episode and season number S00E00 using regex.
 
+# Use an engine script stored somewhere else:
+python AVSync_batch_regex.py ./ref ./foreign ./output --engine "D:\\tools\\AVSync_v18.py"
+
 # Force overwrite of existing files in the output folder:
 python AVSync_batch_regex.py ./ref ./foreign ./output --overwrite
 
-# With pass-through arguments for AVSync_v14.py:
+# With pass-through arguments for AVSync_v18.py:
 # (All arguments after the three folders are passed directly to the main script)
 python AVSync_batch_regex.py ./ref ./foreign ./output --ref_lang eng --foreign_lang hin --foreign_tracks all
 
 # Sync all foreign audio tracks with QC images:
 python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all --qc_output_dir ./qc_images
 
+# Add uniform-sample anchors every 90s and clear track titles in the output:
+python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --uniform_sample_interval 90 --clean_track_names
+
 # Note: --auto_detect is always injected in batch mode to skip interactive prompts.
-# A valid --foreign_lang is REQUIRED in batch mode (v14 enforces language metadata).
+# A valid --foreign_lang is REQUIRED in batch mode (v18 enforces language metadata).
 # If the foreign files have proper language tags in metadata, they will be used automatically.
 
 # It is recommended to use quotes around paths, especially if they contain spaces.
@@ -87,6 +93,12 @@ python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --forei
     parser.add_argument("output_dir", help="The directory where the final muxed video files will be saved.")
     
     parser.add_argument(
+        "--engine",
+        metavar="PATH",
+        default=None,
+        help=f"Path to the engine script. Default: '{AVSYNC_SCRIPT_NAME}' next to this batch script (or in the current folder)."
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Force the script to re-process and overwrite files that already exist in the output directory. Default is to skip them."
@@ -96,11 +108,17 @@ python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --forei
     args, unknown_args = parser.parse_known_args()
 
     # --- 1. Initial Validation ---
-    print("--- AVSync Batch Processor ---")
+    print(f"--- AVSync v18 Batch Processor (SxxExx matching) -> {AVSYNC_SCRIPT_NAME} ---")
 
     # Resolve the main script relative to this batch script (not just CWD)
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    avsync_script_path = os.path.join(script_dir, AVSYNC_SCRIPT_NAME)
+    if args.engine:
+        avsync_script_path = os.path.abspath(args.engine)
+        if not os.path.isfile(avsync_script_path):
+            print(f"\nFATAL ERROR: Engine script given with --engine was not found: {avsync_script_path}")
+            sys.exit(1)
+    else:
+        avsync_script_path = os.path.join(script_dir, AVSYNC_SCRIPT_NAME)
     if not os.path.isfile(avsync_script_path):
         # Fallback: try current working directory
         avsync_script_path = os.path.abspath(AVSYNC_SCRIPT_NAME)
@@ -122,6 +140,7 @@ python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --forei
     # Create the output directory if it doesn't exist
     try:
         os.makedirs(args.output_dir, exist_ok=True)
+        print(f"Engine:           {avsync_script_path}")
         print(f"Reference Folder: {os.path.abspath(args.ref_dir)}")
         print(f"Foreign Folder:   {os.path.abspath(args.foreign_dir)}")
         print(f"Output Folder:    {os.path.abspath(args.output_dir)}")
@@ -206,7 +225,7 @@ python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --forei
             skipped_existing_count += 1
             continue
         
-        # Construct the command to run AVSync_v14.py
+        # Construct the command to run AVSync_v18.py
         # Using sys.executable ensures the same python interpreter is used
         # --auto_detect is injected to ensure non-interactive batch operation
         command = [

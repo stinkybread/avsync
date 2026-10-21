@@ -260,7 +260,7 @@ def get_cache_path(args):
 def save_checkpoint(cache_path, visual_anchors_details):
     """Save checkpoint data to disk"""
     checkpoint_data = {
-        'version': 14,
+        'version': CACHE_VERSION,
         'visual_anchors_details': visual_anchors_details,
         'timestamp': time.time()
     }
@@ -284,7 +284,7 @@ def load_checkpoint(cache_path):
         with open(cache_path, 'rb') as f:
             checkpoint_data = pickle.load(f)
         
-        if checkpoint_data.get('version') != 14:
+        if checkpoint_data.get('version') != CACHE_VERSION:
             logger.warning(f"[CACHE] Version mismatch, ignoring cache")
             return None
             
@@ -462,6 +462,18 @@ MKVMERGE_EXEC = None
 MATCH_WINDOW_PERCENT = 0.06 # Percentage of ref video duration for INITIAL anchor search window
 ANCHOR_FOLLOW_FORWARD_WINDOW_S = 10.0 # Seconds forward from estimated position for subsequent matches
 
+# --- Uniform Sampling Constants ---
+UNIFORM_TARGET_WIDTH = 854          # 480p width (16:9); height=480
+UNIFORM_TARGET_HEIGHT = 480
+UNIFORM_CROP_CENTER_DEFAULT = 0.70  # Use central 70% of frame to avoid logos/letterboxing
+UNIFORM_MIN_PIXEL_VARIANCE = 150.0  # Below this => blank/solid frame, reject
+UNIFORM_MIN_LAPLACIAN_VAR = 40.0    # Below this => blurry frame, reject
+UNIFORM_MIN_EDGE_PIXELS = 300       # Below this => insufficient scene detail, reject
+UNIFORM_FOREIGN_CANDIDATES = 5      # Number of foreign frames to extract around estimated time
+UNIFORM_FOREIGN_SEARCH_WINDOW_S = 45.0  # ±seconds around interpolated foreign estimate
+
+CACHE_VERSION = 18  # Bump whenever anchor-generation logic changes (invalidates old checkpoints)
+
 # Logger will be initialized in main() with proper file output
 # Use a temporary logger for early errors
 logger = logging.getLogger('avsync')
@@ -472,15 +484,17 @@ if not logger.handlers:
     logger.addHandler(_temp_handler)
 
 # --- Utility & FFmpeg/FFprobe Functions ---
-def find_executable(name):
-    """Finds an executable in the system PATH."""
+def find_executable(name, required=True):
+    """Finds an executable in the system PATH. Missing optional tools log a warning, not an error."""
     exec_path = shutil.which(name)
     if exec_path:
         logger.debug(f"Found executable '{name}' at: {exec_path}")
         return exec_path
-    else:
+    if required:
         logger.error(f"'{name}' command not found in system PATH.")
-        return None
+    else:
+        logger.warning(f"'{name}' not found in system PATH (optional; ffmpeg will be used for muxing).")
+    return None
 
 def run_ffmpeg(cmd_list, desc="FFmpeg Task", verbose_success=False, capture_stderr=False):
     """Runs an FFmpeg command with logging and error handling."""
@@ -751,6 +765,10 @@ def prompt_user_for_audio_stream(video_path, stream_type="foreign"):
                 continue
         except ValueError:
             print("Error: Please enter a valid number.")
+        except (EOFError, KeyboardInterrupt):
+            # No interactive console (e.g. launched from the GUI): fall back to auto-detection
+            print("\n  No interactive input available. Using auto-detection.")
+            return None
 
 
 def prompt_user_for_foreign_tracks(video_path, primary_stream_idx=None):
@@ -1382,6 +1400,344 @@ def filter_temporal_inconsistency(matches_after_similarity):
     logger.info(f"  -> Temporal filtering complete. Removed {removed_count} inconsistent pairs ({elapsed_time:.2f}s).")
     # Return a list of tuples: [(ref_filename, foreign_filename, ref_time, foreign_time)]
     return filtered_list
+
+
+# --- Uniform Sampling Stage Functions ---
+
+def _parse_aspect_ratio(ar_str):
+    """Parse '16:9' or '4:3' string to (w, h) tuple of ints. Returns None on failure."""
+    if not ar_str:
+        return None
+    try:
+        parts = ar_str.strip().split(':')
+        if len(parts) != 2:
+            return None
+        return (int(parts[0]), int(parts[1]))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _build_aspect_pad_filter(ar_w, ar_h):
+    """
+    Build an ffmpeg vf filter string that pads the input to the target aspect ratio
+    without distortion (adds black bars as needed), then scales to target resolution.
+    Result is always UNIFORM_TARGET_WIDTH x UNIFORM_TARGET_HEIGHT.
+    """
+    tw, th = UNIFORM_TARGET_WIDTH, UNIFORM_TARGET_HEIGHT
+    # Pad to target AR first, then scale
+    # pad=w=max(iw*ar_h/ar_w\,ih*ar_w/ar_h):... is complex; use simpler approach:
+    # scale to fit within target keeping AR, then pad to exact target size
+    pad_filter = (
+        f"scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+        f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:black"
+    )
+    return pad_filter
+
+
+def check_frame_quality(img_gray, min_variance, min_laplacian_var, min_edge_pixels):
+    """
+    Quality gate for a uniform sample candidate frame.
+
+    Args:
+        img_gray:         Grayscale numpy array (already loaded)
+        min_variance:     Minimum pixel variance; below this = blank/solid frame
+        min_laplacian_var: Minimum Laplacian variance; below this = blurry
+        min_edge_pixels:  Minimum Canny edge pixel count; below this = insufficient detail
+
+    Returns:
+        (bool, str): (passes, reason_if_failed)
+    """
+    if img_gray is None or img_gray.size == 0:
+        return False, "empty image"
+
+    # 1. Blank / solid colour check
+    variance = float(np.var(img_gray))
+    if variance < min_variance:
+        return False, f"blank/solid frame (variance={variance:.1f} < {min_variance})"
+
+    # 2. Blur check via Laplacian variance
+    laplacian_var = float(cv2.Laplacian(img_gray, cv2.CV_64F).var())
+    if laplacian_var < min_laplacian_var:
+        return False, f"blurry frame (laplacian_var={laplacian_var:.1f} < {min_laplacian_var})"
+
+    # 3. Edge density check
+    # Adaptive thresholds based on median intensity
+    median_val = float(np.median(img_gray))
+    lo = max(0, median_val * 0.5)
+    hi = min(255, median_val * 1.5)
+    edges = cv2.Canny(img_gray.astype(np.uint8), lo, hi)
+    edge_pixels = int(np.count_nonzero(edges))
+    if edge_pixels < min_edge_pixels:
+        return False, f"insufficient edges ({edge_pixels} < {min_edge_pixels})"
+
+    return True, ""
+
+
+def extract_single_frame(video_path, timestamp_s, output_path, ar_tuple=None):
+    """
+    Extract exactly one frame from video_path at timestamp_s.
+    If ar_tuple=(w,h) is provided, pads the frame to that aspect ratio before saving.
+    Returns True on success.
+    """
+    global FFMPEG_EXEC
+    vf_parts = []
+    if ar_tuple:
+        vf_parts.append(_build_aspect_pad_filter(ar_tuple[0], ar_tuple[1]))
+    else:
+        # Just scale to target resolution
+        vf_parts.append(f"scale={UNIFORM_TARGET_WIDTH}:{UNIFORM_TARGET_HEIGHT}:force_original_aspect_ratio=decrease,"
+                         f"pad={UNIFORM_TARGET_WIDTH}:{UNIFORM_TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black")
+
+    vf_str = ",".join(vf_parts)
+    cmd = [
+        FFMPEG_EXEC, "-hide_banner", "-loglevel", "error",
+        "-ss", f"{timestamp_s:.6f}",
+        "-i", video_path,
+        "-vframes", "1",
+        "-vf", vf_str,
+        "-q:v", "2",
+        "-y", output_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+        return result.returncode == 0 and os.path.exists(output_path)
+    except Exception:
+        return False
+
+
+def center_crop_and_resize(img_gray, crop_center_pct, target_w, target_h):
+    """
+    Crop the central crop_center_pct fraction of the frame, then resize to (target_w, target_h).
+    Returns the processed numpy array, or None on failure.
+    """
+    h, w = img_gray.shape[:2]
+    crop_h = int(h * crop_center_pct)
+    crop_w = int(w * crop_center_pct)
+    y0 = (h - crop_h) // 2
+    x0 = (w - crop_w) // 2
+    cropped = img_gray[y0:y0 + crop_h, x0:x0 + crop_w]
+    if cropped.size == 0:
+        return None
+    resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    return resized
+
+
+
+def run_uniform_sampling_stage(ref_video, foreign_video, existing_anchors, temp_dir,
+                                audio_start_ref, audio_end_ref,
+                                audio_start_foreign, audio_end_foreign,
+                                sample_interval_s, match_threshold,
+                                crop_center_pct, ref_ar_tuple, foreign_ar_tuple,
+                                min_variance, min_laplacian_var, min_edge_pixels):
+    """
+    Uniform sampling across the full content timeline.
+
+    Generates a ref frame sample every sample_interval_s seconds across the full
+    audio content range. Existing scene-detected anchors are used ONLY to improve
+    interpolation of expected foreign timestamps — they do NOT restrict where samples
+    are placed. Every interval gets a sample attempt regardless of existing coverage.
+
+    For each sample point:
+    - Extracts ref frame (HR), applies quality gate (blank/blur/edge checks)
+    - Interpolates expected foreign time from surrounding existing anchors via
+      piecewise linear interpolation (falls back to linear from audio boundaries)
+    - Searches +/-UNIFORM_FOREIGN_SEARCH_WINDOW_S around the interpolated estimate
+    - Enforces strict monotonic foreign-time constraint across all accepted matches
+
+    Scene-detected anchors and uniform anchors are merged in main() and sorted by
+    ref_time before the sync stage. The temporal filter handles residual conflicts.
+
+    Returns: list of (ref_name, foreign_name, ref_time, foreign_time) tuples
+             with 'UNIFORM_SAMPLE_' prefix in names.
+    """
+    logger.info("\n===== Uniform Sampling Stage (Full Timeline) =====")
+    stage_start = time.time()
+
+    content_duration = audio_end_ref - audio_start_ref
+    if content_duration <= 0:
+        logger.warning("  Zero-duration content range; skipping uniform sampling.")
+        return []
+
+    # Build interpolation anchor list from existing scene-detected anchors + audio boundaries
+    # These are used ONLY to estimate where the foreign frame should be at each sample point
+    anchor_pairs_sorted = []
+    if existing_anchors:
+        anchor_pairs_sorted = sorted([(a[2], a[3]) for a in existing_anchors], key=lambda x: x[0])
+    # Always bookend with audio boundaries
+    interp_anchors = [(audio_start_ref, audio_start_foreign)] + anchor_pairs_sorted + [(audio_end_ref, audio_end_foreign)]
+    # Deduplicate by ref_time
+    seen = set()
+    interp_anchors_dedup = []
+    for pair in interp_anchors:
+        if pair[0] not in seen:
+            interp_anchors_dedup.append(pair)
+            seen.add(pair[0])
+    interp_anchors = sorted(interp_anchors_dedup, key=lambda x: x[0])
+
+    # Generate uniform sample points evenly across full content range
+    n_samples = max(1, int(content_duration / sample_interval_s))
+    step = content_duration / (n_samples + 1)
+    sample_ref_times = [audio_start_ref + step * (k + 1) for k in range(n_samples)]
+
+    logger.info(f"  Content range: {format_time(audio_start_ref)} -> {format_time(audio_end_ref)} "
+                f"({content_duration:.1f}s)")
+    logger.info(f"  Interval: {sample_interval_s:.1f}s -> {n_samples} sample point(s) to attempt")
+
+    uniform_dir = os.path.join(temp_dir, "Uniform_Samples")
+    os.makedirs(uniform_dir, exist_ok=True)
+
+    last_accepted_foreign_t = audio_start_foreign  # Global monotonic floor
+    new_anchors = []
+    total_quality_rejected = 0
+    total_no_match = 0
+    sample_counter = 0
+
+    for sample_ref_t in tqdm(sample_ref_times, desc="  Uniform sampling", unit="frame",
+                              ncols=80, leave=False):
+        sample_counter += 1
+        ref_frame_name = f"UNIFORM_SAMPLE_{sample_counter:04d}_ref"
+        ref_frame_path = os.path.join(uniform_dir, f"{ref_frame_name}.png")
+
+        # --- Extract ref frame at exact timestamp ---
+        if not extract_single_frame(ref_video, sample_ref_t, ref_frame_path, ref_ar_tuple):
+            logger.debug(f"    Sample {sample_counter}: Failed to extract ref frame at {format_time(sample_ref_t)}")
+            total_quality_rejected += 1
+            continue
+
+        ref_img = cv2.imread(ref_frame_path, cv2.IMREAD_GRAYSCALE)
+        if ref_img is None:
+            total_quality_rejected += 1
+            continue
+
+        # Quality gate on ref frame (HR = template)
+        passes, reason = check_frame_quality(ref_img, min_variance, min_laplacian_var, min_edge_pixels)
+        if not passes:
+            logger.debug(f"    Sample {sample_counter} @ {format_time(sample_ref_t)}: Quality rejected ({reason})")
+            total_quality_rejected += 1
+            try: os.remove(ref_frame_path)
+            except: pass
+            continue
+
+        # Center crop + resize ref template
+        ref_template = center_crop_and_resize(ref_img, crop_center_pct,
+                                               UNIFORM_TARGET_WIDTH, UNIFORM_TARGET_HEIGHT)
+        if ref_template is None:
+            total_quality_rejected += 1
+            continue
+
+        # --- Interpolate expected foreign time using piecewise linear from surrounding anchors ---
+        interp_foreign_t = audio_start_foreign  # fallback
+        for i in range(len(interp_anchors) - 1):
+            r0, f0 = interp_anchors[i]
+            r1, f1 = interp_anchors[i + 1]
+            if r0 <= sample_ref_t <= r1:
+                ratio = (sample_ref_t - r0) / (r1 - r0) if r1 > r0 else 0.0
+                interp_foreign_t = f0 + ratio * (f1 - f0)
+                break
+        else:
+            # Beyond last anchor — extrapolate from last segment
+            if len(interp_anchors) >= 2:
+                r0, f0 = interp_anchors[-2]
+                r1, f1 = interp_anchors[-1]
+                ratio = (sample_ref_t - r0) / (r1 - r0) if r1 > r0 else 1.0
+                interp_foreign_t = f0 + ratio * (f1 - f0)
+
+        interp_foreign_t = max(audio_start_foreign, min(audio_end_foreign, interp_foreign_t))
+
+        # --- Foreign search window, clamped by monotonic floor ---
+        search_low = max(last_accepted_foreign_t + 0.001,
+                         interp_foreign_t - UNIFORM_FOREIGN_SEARCH_WINDOW_S)
+        search_high = min(audio_end_foreign,
+                          interp_foreign_t + UNIFORM_FOREIGN_SEARCH_WINDOW_S)
+
+        if search_low >= search_high:
+            logger.debug(f"    Sample {sample_counter}: No valid search window "
+                         f"(floor={last_accepted_foreign_t:.1f}s, interp={interp_foreign_t:.1f}s)")
+            total_no_match += 1
+            try: os.remove(ref_frame_path)
+            except: pass
+            continue
+
+        # --- Extract N candidate foreign frames spread across search window ---
+        n_candidates = UNIFORM_FOREIGN_CANDIDATES
+        candidate_step = (search_high - search_low) / (n_candidates + 1)
+        candidate_times = [search_low + candidate_step * (k + 1) for k in range(n_candidates)]
+
+        best_score = -1.0
+        best_foreign_t = None
+        best_foreign_name = None
+
+        for cand_idx, cand_t in enumerate(candidate_times):
+            foreign_frame_path = os.path.join(uniform_dir,
+                f"UNIFORM_SAMPLE_{sample_counter:04d}_foreign_{cand_idx}.png")
+
+            if not extract_single_frame(foreign_video, cand_t, foreign_frame_path, foreign_ar_tuple):
+                continue
+
+            foreign_img = cv2.imread(foreign_frame_path, cv2.IMREAD_GRAYSCALE)
+            if foreign_img is None:
+                continue
+
+            if np.var(foreign_img) < min_variance * 0.5:
+                try: os.remove(foreign_frame_path)
+                except: pass
+                continue
+
+            foreign_prep = center_crop_and_resize(foreign_img, crop_center_pct,
+                                                   UNIFORM_TARGET_WIDTH, UNIFORM_TARGET_HEIGHT)
+            if foreign_prep is None:
+                try: os.remove(foreign_frame_path)
+                except: pass
+                continue
+
+            try:
+                result = cv2.matchTemplate(foreign_prep, ref_template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(result)
+            except Exception as e:
+                logger.debug(f"    matchTemplate error: {e}")
+                max_val = -1.0
+            finally:
+                try: os.remove(foreign_frame_path)
+                except: pass
+
+            if max_val > best_score:
+                best_score = max_val
+                best_foreign_t = cand_t
+                best_foreign_name = f"UNIFORM_SAMPLE_{sample_counter:04d}_foreign"
+
+        # --- Accept or reject ---
+        if best_foreign_t is None or best_score < match_threshold:
+            logger.debug(f"    Sample {sample_counter} @ {format_time(sample_ref_t)}: "
+                         f"No match above threshold (best={best_score:.3f})")
+            total_no_match += 1
+            try: os.remove(ref_frame_path)
+            except: pass
+            continue
+
+        if best_foreign_t <= last_accepted_foreign_t:
+            logger.debug(f"    Sample {sample_counter}: Monotonic violation "
+                         f"({best_foreign_t:.3f}s <= floor {last_accepted_foreign_t:.3f}s)")
+            total_no_match += 1
+            try: os.remove(ref_frame_path)
+            except: pass
+            continue
+
+        # Accepted
+        last_accepted_foreign_t = best_foreign_t
+        new_anchors.append((ref_frame_name, best_foreign_name, sample_ref_t, best_foreign_t))
+        logger.debug(f"    Sample {sample_counter}: MATCH {format_time(sample_ref_t)} -> "
+                     f"{format_time(best_foreign_t)} (score={best_score:.3f})")
+
+    elapsed = time.time() - stage_start
+    accepted = len(new_anchors)
+    logger.info(f"--- Uniform Sampling Complete ({elapsed:.1f}s) ---")
+    logger.info(f"  Attempted: {n_samples} | Quality rejected: {total_quality_rejected} | "
+                f"No match: {total_no_match} | Accepted: {accepted}")
+
+    return new_anchors
+
+
+# --- End Uniform Sampling Stage Functions ---
 
 
 def run_image_pairing_stage(ref_video_path, foreign_video_path, temp_dir, scene_threshold, match_threshold, similarity_threshold):
@@ -2424,6 +2780,123 @@ def create_qc_images(visual_anchors_details, final_segment_anchors,
 
 # --- Muxing Function ---
 
+def clean_output_track_metadata(output_video):
+    """
+    After muxing, ensure no audio or subtitle track has a 'title'/'name' tag set.
+    Players should display tracks as "Track 1 - Language" etc., not custom labels.
+
+    For MKV: uses mkvpropedit in-place (fast, no re-mux).
+    For other containers: uses ffmpeg to re-mux with title fields cleared.
+
+    Returns True if cleaning succeeded or was not needed, False on error.
+    """
+    global MKVMERGE_EXEC, FFPROBE_EXEC, FFMPEG_EXEC
+
+    if not output_video or not os.path.exists(output_video):
+        logger.warning(f"  Clean metadata: output file not found: {output_video}")
+        return False
+
+    # Probe all streams for title tags
+    try:
+        probe_cmd = [FFPROBE_EXEC, '-v', 'error',
+                     '-show_entries', 'stream=index,codec_type:stream_tags=title',
+                     '-of', 'json', output_video]
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True, timeout=30)
+        streams = json.loads(result.stdout).get('streams', [])
+    except Exception as e:
+        logger.warning(f"  Clean metadata: probe failed: {e}")
+        return False
+
+    # Find streams with non-empty title tags
+    dirty_indices = []
+    for s in streams:
+        title = s.get('tags', {}).get('title', '') or ''
+        if title.strip():
+            dirty_indices.append(s.get('index'))
+            logger.info(f"  Clean metadata: Stream {s.get('index')} ({s.get('codec_type', '?')}) "
+                        f"has title tag: \"{title.strip()}\"")
+
+    if not dirty_indices:
+        logger.info("  Clean metadata: All track names already clean. Nothing to do.")
+        return True
+
+    logger.info(f"  Clean metadata: Clearing title tags on {len(dirty_indices)} stream(s)...")
+
+    is_mkv = output_video.lower().endswith(('.mkv', '.mka', '.mks'))
+
+    if is_mkv and MKVMERGE_EXEC:
+        # Use mkvpropedit for in-place edit (no re-mux)
+        mkvpropedit_exec = shutil.which('mkvpropedit')
+        if not mkvpropedit_exec:
+            logger.warning("  Clean metadata: mkvpropedit not found. Falling back to ffmpeg re-mux.")
+        else:
+            # Get mkvmerge track list (0-based IDs) to map absolute stream indices to mkvpropedit track numbers
+            try:
+                identify_cmd = [MKVMERGE_EXEC, '--identify', '--identification-format', 'json', output_video]
+                result = subprocess.run(identify_cmd, capture_output=True, text=True, check=True, timeout=30)
+                mkv_data = json.loads(result.stdout)
+                mkv_tracks = mkv_data.get('tracks', [])
+            except Exception as e:
+                logger.warning(f"  Clean metadata: mkvmerge identify failed: {e}. Falling back to ffmpeg.")
+                mkv_tracks = None
+
+            if mkv_tracks is not None:
+                # Find tracks with non-empty name property
+                cmd = [mkvpropedit_exec, output_video]
+                edits_added = 0
+                for track in mkv_tracks:
+                    track_name = track.get('properties', {}).get('track_name', '') or ''
+                    if track_name.strip():
+                        track_num = track.get('id', 0) + 1  # mkvpropedit is 1-based
+                        cmd.extend(['--edit', f'track:@{track_num}', '--set', 'name='])
+                        edits_added += 1
+
+                if edits_added == 0:
+                    logger.info("  Clean metadata: mkvmerge sees no track names to clear.")
+                    return True
+
+                try:
+                    subprocess.run(cmd, capture_output=True, check=True, timeout=60)
+                    logger.info(f"  Clean metadata: [OK] Cleared {edits_added} track name(s) via mkvpropedit")
+                    return True
+                except subprocess.CalledProcessError as e:
+                    logger.warning(f"  Clean metadata: mkvpropedit failed: {e.stderr}. Falling back to ffmpeg.")
+
+    # ffmpeg re-mux fallback (non-MKV, or mkvpropedit unavailable/failed)
+    temp_output = output_video + '.meta_clean_temp' + os.path.splitext(output_video)[1]
+    ffmpeg_cmd = [
+        FFMPEG_EXEC, '-hide_banner', '-loglevel', 'warning',
+        '-i', output_video,
+        '-map', '0',
+        '-c', 'copy',
+        '-map_metadata', '0',
+        '-map_chapters', '0',
+    ]
+    # Clear title for every stream that had one
+    for idx in dirty_indices:
+        ffmpeg_cmd.extend([f'-metadata:s:{idx}', 'title='])
+    ffmpeg_cmd.extend(['-y', temp_output])
+
+    try:
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, check=True, timeout=600)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"  Clean metadata: ffmpeg re-mux failed: {e.stderr[:300]}")
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+        return False
+
+    # Replace original
+    try:
+        os.replace(temp_output, output_video)
+        logger.info(f"  Clean metadata: [OK] Cleared title tags via ffmpeg re-mux")
+        return True
+    except Exception as e:
+        logger.error(f"  Clean metadata: Could not replace output file: {e}")
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+        return False
+
+
 def run_muxing(args, ref_stream_idx, synced_subtitles=None, synced_foreign_tracks=None):
     """
     Muxes synced foreign audio track(s) into the reference video while preserving ALL original
@@ -3200,35 +3673,38 @@ def sync_subtitles(foreign_video, segment_anchors, ref_delay, temp_dir, foreign_
 def main():
     global FFMPEG_EXEC, FFPROBE_EXEC, MKVMERGE_EXEC
     parser = argparse.ArgumentParser(
-        description="AVSync: Synchronizes foreign audio to a reference video using visual anchors and precise audio timing.",
+        description="AVSync v18: Synchronizes foreign audio to a reference video using visual anchors and precise audio timing.",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=f"""
 Example Usage:
   # Basic usage (muxed video output is mandatory)
-  python gs.py ref_video.mkv foreign_video.mkv output_video.mkv --ref_lang eng --foreign_lang spa
+  python AVSync_v18.py ref_video.mkv foreign_video.mkv output_video.mkv --ref_lang eng --foreign_lang spa
 
   # Specify audio streams by index instead of language (Use absolute stream indices shown)
-  python gs.py ref_video.mkv foreign_video.mkv output_video.mkv --ref_stream_idx 1 --foreign_stream_idx 2
+  python AVSync_v18.py ref_video.mkv foreign_video.mkv output_video.mkv --ref_stream_idx 1 --foreign_stream_idx 2
 
   # Set minimum segment duration for audio filtering to 10 seconds (default is 5)
-  python gs.py ref_video.mkv foreign_video.mkv output_video.mkv --min_segment_duration 10
+  python AVSync_v18.py ref_video.mkv foreign_video.mkv output_video.mkv --min_segment_duration 10
 
   # Keep the synchronized WAV file separately
-  python gs.py ref_video.mkv foreign_video.mkv output_video.mkv --output_audio synced_audio.wav
+  python AVSync_v18.py ref_video.mkv foreign_video.mkv output_video.mkv --output_audio synced_audio.wav
 
   # Generate QC images and segment CSV along with the video
-  python gs.py ref_video.mkv foreign_video.mkv output_video.mkv --qc_output_dir ./qc_images --output_csv segments.csv
+  python AVSync_v18.py ref_video.mkv foreign_video.mkv output_video.mkv --qc_output_dir ./qc_images --output_csv segments.csv
 
 Workflow:
 1. Extracts scene change frames from both videos.
 2. Matches frames using anchor-and-follow: initial anchor search (+/- {MATCH_WINDOW_PERCENT*100}% of ref duration), then +{ANCHOR_FOLLOW_FORWARD_WINDOW_S}s forward from estimated position.
 3. Filters matches based on similarity and temporal consistency.
-4. Extracts audio tracks based on language tags or specified absolute indices.
-5. Determines audio content boundaries and filters anchor points based on minimum segment duration and duration difference.
-6. Processes audio segments iteratively to match reference timing precisely.
-7. Concatenates processed segments and applies start delay.
-8. (Optional) Generates QC images and/or segment info CSV.
-9. Muxes the reference video, original audio, and synchronized foreign audio into the final output video.
+4. (Optional, --uniform_sample_interval) Adds uniform-sample anchors across the full timeline.
+5. Extracts audio tracks based on language tags or specified absolute indices.
+6. Determines audio content boundaries and filters anchor points based on minimum segment duration and duration difference.
+7. Processes audio segments iteratively to match reference timing precisely.
+8. Concatenates processed segments and applies start delay.
+9. Retimes text subtitles (SRT, ASS/SSA with styling preserved); bitmap subtitles (PGS/VobSub) pass through unchanged.
+10. (Optional) Generates QC images and/or segment info CSV.
+11. Muxes the reference video, original audio, synchronized foreign audio and subtitles into the final output video.
+12. (Optional, --clean_track_names) Clears track title tags in the output.
 """
     )
     # --- Input/Output Arguments ---
@@ -3255,6 +3731,35 @@ Workflow:
     # Note: Match search window is now calculated automatically, not a direct argument
 
     # --- Audio Processing Arguments ---
+    # --- Uniform Sampling Arguments ---
+    uniform_group = parser.add_argument_group('Uniform Sampling Parameters (Full-Timeline Anchor Fill)')
+    uniform_group.add_argument("--uniform_sample_interval", type=float, default=0.0, metavar="SECONDS",
+        help="Enable uniform sampling: one extra ref frame every SECONDS across the whole content range, "
+             "matched to the foreign video to add anchors that scene detection missed. "
+             "Recommended: 60-120s for typical episodes. 0 = disabled (default).")
+    uniform_group.add_argument("--uniform_ref_aspect_ratio", type=str, default=None, metavar="W:H",
+        help="Force aspect ratio for the REFERENCE video's uniform sample frames (e.g., '4:3', '16:9'). "
+             "Pads with black bars as needed. Use when ref has letterboxing or is a different source than foreign. (Default: none)")
+    uniform_group.add_argument("--uniform_foreign_aspect_ratio", type=str, default=None, metavar="W:H",
+        help="Force aspect ratio for the FOREIGN video's uniform sample frames (e.g., '4:3', '16:9'). "
+             "Pads with black bars as needed. Use when foreign has different encoding/AR than ref. (Default: none)")
+    uniform_group.add_argument("--uniform_crop_center", type=float, default=UNIFORM_CROP_CENTER_DEFAULT, metavar="FRACTION",
+        help=f"Fraction of the frame centre to use for template matching (0.0-1.0). "
+             f"Crops out edges/logos before matching. (Default: {UNIFORM_CROP_CENTER_DEFAULT})")
+    uniform_group.add_argument("--uniform_match_threshold", type=float, default=0.7, metavar="SCORE",
+        help="Template match score threshold for uniform samples (0.0-1.0). "
+             "Uniform frames often need a slightly lower threshold than scene frames "
+             "due to smaller crop area. (Default: 0.7)")
+    uniform_group.add_argument("--uniform_min_variance", type=float, default=UNIFORM_MIN_PIXEL_VARIANCE, metavar="VAL",
+        help=f"Minimum pixel variance for a sample frame to be considered non-blank. "
+             f"(Default: {UNIFORM_MIN_PIXEL_VARIANCE})")
+    uniform_group.add_argument("--uniform_min_blur", type=float, default=UNIFORM_MIN_LAPLACIAN_VAR, metavar="VAL",
+        help=f"Minimum Laplacian variance for blur rejection. Frames below this are too blurry to match reliably. "
+             f"(Default: {UNIFORM_MIN_LAPLACIAN_VAR})")
+    uniform_group.add_argument("--uniform_min_edges", type=int, default=UNIFORM_MIN_EDGE_PIXELS, metavar="PIXELS",
+        help=f"Minimum Canny edge pixel count. Frames with fewer edges lack sufficient detail for matching. "
+             f"(Default: {UNIFORM_MIN_EDGE_PIXELS})")
+
     audio_group = parser.add_argument_group('Audio Processing Parameters')
     audio_group.add_argument("--ref_lang", default=DEFAULT_REF_LANG, help=f"Reference audio language code (3-letter ISO 639-2/T) for stream selection. (Default: {DEFAULT_REF_LANG})")
     audio_group.add_argument("--foreign_lang", default=DEFAULT_FOREIGN_LANG, help=f"Foreign audio language code (3-letter ISO 639-2/T, e.g., hin, jpn, spa). REQUIRED for proper metadata tagging. If not provided or invalid, you will be prompted. (Default: {DEFAULT_FOREIGN_LANG})")
@@ -3276,6 +3781,8 @@ Workflow:
     mux_group = parser.add_argument_group('Muxing Parameters')
     mux_group.add_argument("--mux_foreign_codec", default=DEFAULT_MUX_ACODEC, help=f"Audio codec for the synced foreign track in the muxed output (e.g., 'aac', 'ac3', 'copy'). (Default: {DEFAULT_MUX_ACODEC})")
     mux_group.add_argument("--mux_foreign_bitrate", default=DEFAULT_MUX_ABITRATE, help=f"Audio bitrate for the synced foreign track if re-encoding (e.g., '192k', '320k'). (Default: {DEFAULT_MUX_ABITRATE})")
+    mux_group.add_argument("--clean_track_names", action="store_true",
+        help="After muxing, clear the title/name tag on every audio and subtitle track so players show 'Track N - Language'. Off by default because it also clears titles on the reference video's original tracks.")
 
 
     # --- Caching Arguments ---
@@ -3321,7 +3828,7 @@ Workflow:
     # Professional startup banner
     logger.info("")
     logger.info("=" * 70)
-    logger.info(" AVSync v14 - Audio/Video Synchronization Engine")
+    logger.info(" AVSync v18 - Audio/Video Synchronization Engine")
     logger.info("=" * 70)
     logger.info(f"Reference video : {args.ref_video}")
     logger.info(f"Foreign video   : {args.foreign_video}")
@@ -3341,7 +3848,7 @@ Workflow:
     # --- Find Executables ---
     FFMPEG_EXEC = find_executable("ffmpeg")
     FFPROBE_EXEC = find_executable("ffprobe")
-    MKVMERGE_EXEC = find_executable("mkvmerge")
+    MKVMERGE_EXEC = find_executable("mkvmerge", required=False)
     if not FFMPEG_EXEC or not FFPROBE_EXEC:
         logger.error("FATAL: Required 'ffmpeg' and/or 'ffprobe' executable not found in system PATH.")
         sys.exit(1)
@@ -3537,6 +4044,88 @@ Workflow:
         if forced_sync_points:
             visual_anchors_details = inject_forced_sync_points(visual_anchors_details, forced_sync_points)
 
+        # === Stage 1.6: Uniform Sampling (if enabled) ===
+        if getattr(args, 'uniform_sample_interval', 0.0) > 0:
+            ref_ar_tuple = _parse_aspect_ratio(getattr(args, 'uniform_ref_aspect_ratio', None))
+            foreign_ar_tuple = _parse_aspect_ratio(getattr(args, 'uniform_foreign_aspect_ratio', None))
+            if ref_ar_tuple:
+                logger.info(f"  Uniform sampling: ref aspect ratio forced to {args.uniform_ref_aspect_ratio}")
+            if foreign_ar_tuple:
+                logger.info(f"  Uniform sampling: foreign aspect ratio forced to {args.uniform_foreign_aspect_ratio}")
+
+            # We need audio boundaries to define the full anchor range.
+            # Quick extraction of boundaries here (duplicated briefly from sync stage —
+            # done to avoid restructuring the sync stage function signature).
+            _ref_wav_quick = os.path.join(temp_dir, "ref_audio_quick_bounds.wav")
+            _foreign_wav_quick = os.path.join(temp_dir, "foreign_audio_quick_bounds.wav")
+            _aresample = f'aresample=resampler=soxr:precision=28:cutoff=0.99'
+
+            # Reuse cached audio boundaries if already extracted (they won't exist yet at this point,
+            # so we do a lightweight extract at low quality just for boundary detection)
+            _ref_streams_quick = get_stream_info(args.ref_video)
+            _foreign_streams_quick = get_stream_info(args.foreign_video)
+            _ref_idx_quick = args.ref_stream_idx if args.ref_stream_idx is not None else find_audio_stream_index_by_lang(_ref_streams_quick, args.ref_lang)
+            _foreign_idx_quick = args.foreign_stream_idx if args.foreign_stream_idx is not None else find_audio_stream_index_by_lang(_foreign_streams_quick, args.foreign_lang)
+
+            _audio_bounds_ok = False
+            _audio_start_ref = 0.0
+            _audio_end_ref = get_file_duration(args.ref_video, 'video') or 0.0
+            _audio_start_foreign = 0.0
+            _audio_end_foreign = get_file_duration(args.foreign_video, 'video') or 0.0
+
+            if _ref_idx_quick is not None and _foreign_idx_quick is not None:
+                _extract_ok_r, _ = run_ffmpeg(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                     "-i", args.ref_video, "-map", f"0:{_ref_idx_quick}", "-vn",
+                     "-c:a", "pcm_s16le", "-ar", "8000", "-ac", "1",
+                     "-af", _aresample, "-y", "-f", "wav", _ref_wav_quick],
+                    "Quick ref audio for bounds")
+                _extract_ok_f, _ = run_ffmpeg(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                     "-i", args.foreign_video, "-map", f"0:{_foreign_idx_quick}", "-vn",
+                     "-c:a", "pcm_s16le", "-ar", "8000", "-ac", "1",
+                     "-af", _aresample, "-y", "-f", "wav", _foreign_wav_quick],
+                    "Quick foreign audio for bounds")
+                if _extract_ok_r and _extract_ok_f:
+                    _rs, _re = find_audio_start_end(_ref_wav_quick, args.db_threshold)
+                    _fs, _fe = find_audio_start_end(_foreign_wav_quick, args.db_threshold)
+                    if _rs is not None and _fs is not None:
+                        _audio_start_ref, _audio_end_ref = _rs, _re
+                        _audio_start_foreign, _audio_end_foreign = _fs, _fe
+                        _audio_bounds_ok = True
+
+            if not _audio_bounds_ok:
+                logger.warning("  Could not determine audio boundaries for uniform sampling gaps; "
+                               "using full video duration as fallback.")
+
+            uniform_anchors = run_uniform_sampling_stage(
+                ref_video=args.ref_video,
+                foreign_video=args.foreign_video,
+                existing_anchors=visual_anchors_details,
+                temp_dir=temp_dir,
+                audio_start_ref=_audio_start_ref,
+                audio_end_ref=_audio_end_ref,
+                audio_start_foreign=_audio_start_foreign,
+                audio_end_foreign=_audio_end_foreign,
+                sample_interval_s=args.uniform_sample_interval,
+                match_threshold=args.uniform_match_threshold,
+                crop_center_pct=args.uniform_crop_center,
+                ref_ar_tuple=ref_ar_tuple,
+                foreign_ar_tuple=foreign_ar_tuple,
+                min_variance=args.uniform_min_variance,
+                min_laplacian_var=args.uniform_min_blur,
+                min_edge_pixels=args.uniform_min_edges,
+            )
+
+            if uniform_anchors:
+                logger.info(f"--- Injecting {len(uniform_anchors)} Uniform Sample Anchor(s) ---")
+                visual_anchors_details = sorted(
+                    list(visual_anchors_details) + uniform_anchors,
+                    key=lambda x: x[2]  # sort by ref_time
+                )
+                logger.info(f"  Total anchors now: {len(visual_anchors_details)}")
+
+
         # === Stage 2: Audio Synchronization (Iterative Method) ===
         # This function now handles finding streams, filtering anchors, processing, concatenating, and padding.
         # It outputs to args.output_audio (which might be temporary)
@@ -3645,6 +4234,9 @@ Workflow:
             muxing_success = run_muxing(args, final_ref_stream_idx, synced_subtitles, synced_foreign_tracks_for_mux)
             if not muxing_success:
                 raise RuntimeError("Muxing Stage Failed.")
+            if args.clean_track_names:
+                logger.info("--- Cleaning Track Names in Output ---")
+                clean_output_track_metadata(args.output_video)
         else:
              raise RuntimeError("Audio synchronization did not complete successfully, cannot mux.")
 
