@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-AVSync GUI - a desktop front-end for AVSync_v18.py
+AVSync GUI - a desktop front-end for AVSync.py
 
-Run this in the SAME folder as AVSync_v18.py and AVSync_batch_regex.py (or point it at the script
-via the "Script path" field in Setup). Requires only the Python standard
-library (Tkinter). AVSync_v18.py still needs its own dependencies
+Original GUI shell by uruseiyatsura (Discord); extended alongside the engine.
+
+Run this in the SAME folder as AVSync.py and AVSync_batch.py (or point it at the engine
+via the location field at the top of the window). Requires only the Python standard
+library (Tkinter). AVSync.py still needs its own dependencies
 (opencv, scipy, tqdm, numpy) plus ffmpeg / ffprobe on PATH, and
 optionally mkvmerge (this GUI can detect / install / locate it for you).
 """
@@ -24,11 +26,11 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk, filedialog, messagebox
 
-APP_TITLE = "AVSync v18 GUI"
-ENGINE_NAME = "AVSync_v18.py"
+APP_TITLE = "AVSync GUI"
+ENGINE_NAME = "AVSync.py"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_DEFAULT = os.path.join(HERE, ENGINE_NAME)
-BATCH_NAME = "AVSync_batch_regex.py"
+BATCH_NAME = "AVSync_batch.py"
 VIDEO_EXTENSIONS = (".mkv", ".mp4", ".avi", ".mov", ".ts", ".webm")  # keep in sync with the batch script
 EPISODE_RE = re.compile(r"S\d{2}E\d{2}", re.IGNORECASE)
 BATCH_PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\] Processing: (\S+)")
@@ -153,6 +155,19 @@ FIELDS = [
          tooltip="Force sync points where auto-detection fails.\n"
                  "Format: HH:MM:SS:MS>HH:MM:SS:MS,...\n"
                  "Example: 00:00:10:500>00:00:10:800,00:02:00:300>00:02:01:000"),
+    dict(key="force_only", label="Use ONLY the manual sync points (skip scene matching)", kind="check",
+         default=False, cli="--force_sync_only", tab="Image Pairing",
+         tooltip="Skips automatic scene matching entirely and syncs from the manual points above. "
+                 "Uniform sampling still runs if it is turned on."),
+    dict(key="precise", label="Precise matching (slower, checks every frame in the window)", kind="check",
+         default=False, cli="--use_precise_sync", tab="Image Pairing",
+         section="Matching mode",
+         tooltip="Compares each reference scene against every foreign scene nearby and keeps the best "
+                 "match. Slower on long videos; can be more accurate when many shots look alike."),
+    dict(key="keep_aspect", label="Keep aspect ratio when matching (different-shape videos)", kind="check",
+         default=False, cli="--match_keep_aspect", tab="Image Pairing",
+         tooltip="Turn on when the two videos have different shapes, e.g. a cropped 4:3 dub against a "
+                 "16:9 HD release. Frames are compared at the same height without stretching."),
 
 
     # ---- Uniform Sampling tab -------------------------------------------
@@ -200,11 +215,30 @@ FIELDS = [
          default=False, cli="--clean_track_names", tab="Muxing & Cache",
          tooltip="After muxing, clear title tags on every audio/subtitle track so players show "
                  "'Track N - Language'. Also clears titles on the reference's original tracks."),
+    dict(key="extract_audio", label="Also save synced audio track(s) as separate files", kind="check",
+         default=False, cli="--extract_synced_audio", tab="Muxing & Cache",
+         section="Separate files",
+         tooltip="Writes each synced foreign track next to the output as <name>.<lang>.<ext>, "
+                 "ready for Jellyfin/Plex as an external audio track."),
+    dict(key="extract_subs", label="Also save synced subtitle track(s) as separate files", kind="check",
+         default=False, cli="--extract_synced_subtitles", tab="Muxing & Cache",
+         tooltip="Writes each synced subtitle track next to the output (.srt / .ass / .sup)."),
+    dict(key="delete_output", label="Delete the muxed video after saving the separate files", kind="check",
+         default=False, cli="--delete_output_after_extract", tab="Muxing & Cache",
+         tooltip="Keeps only the extracted files, so your original media stays untouched. "
+                 "Needs at least one of the two options above."),
     dict(key="use_cache", label="Use checkpoint cache (faster re-runs)", kind="check",
          default=True, tab="Muxing & Cache",
          section="Performance",
          tooltip="Speeds up repeated runs on the same files by reusing intermediate work. "
                  "Adds --no-cache when turned off."),
+    dict(key="low_memory", label="Low-memory mode (large files, little RAM)", kind="check",
+         default=False, cli="--low-memory", tab="Muxing & Cache",
+         tooltip="Uses a smaller frame cache and at most 2 threads. Slower, but keeps memory "
+                 "use low on very large sources."),
+    dict(key="max_workers", label="Max threads (blank = automatic)", kind="entry",
+         cli="--max-workers", tab="Muxing & Cache",
+         tooltip="Caps the threads FFmpeg and OpenCV may use. Leave blank normally."),
 
     # ---- Logging tab -----------------------------------------------------
     dict(key="verbose", label="Verbose console output", kind="check",
@@ -229,7 +263,7 @@ TAB_HELP = {
     "Audio": "Controls how audio tracks are picked and fine-tuned. Defaults work for most videos.",
     "Image Pairing": "Controls how scenes are matched between the two videos to find sync points.",
     "Uniform Sampling": "Optional extra sync anchors at fixed intervals. Off by default; turn on if long stretches drift.",
-    "Muxing & Cache": "Controls the final file's audio encoding, track naming and re-run speed.",
+    "Muxing & Cache": "Controls the final file's audio encoding and track naming, optional separate track files, and speed/memory use.",
     "Logging": "Controls how much detail is printed while the job runs.",
 }
 

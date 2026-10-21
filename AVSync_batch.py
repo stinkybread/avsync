@@ -7,7 +7,7 @@ from typing import List
 
 # --- Configuration ---
 # The name of the main script to be called.
-AVSYNC_SCRIPT_NAME = "AVSync_v18.py"
+AVSYNC_SCRIPT_NAME = "AVSync.py"
 
 # A tuple of common video file extensions to look for (case-insensitive).
 VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.mov', '.ts', '.webm')
@@ -60,28 +60,28 @@ def main():
 Example Usage:
 
 # Basic usage (will skip files that already exist in the output folder):
-python AVSync_batch_regex.py "C:\\path\\to\\ref_videos" "C:\\path\\to\\foreign_videos" "C:\\path\\to\\output"
+python AVSync_batch.py "C:\\path\\to\\ref_videos" "C:\\path\\to\\foreign_videos" "C:\\path\\to\\output"
 
 # This version of script matches video files NOT based on name but episode and season number S00E00 using regex.
 
 # Use an engine script stored somewhere else:
-python AVSync_batch_regex.py ./ref ./foreign ./output --engine "D:\\tools\\AVSync_v18.py"
+python AVSync_batch.py ./ref ./foreign ./output --engine "D:\\tools\\AVSync.py"
 
 # Force overwrite of existing files in the output folder:
-python AVSync_batch_regex.py ./ref ./foreign ./output --overwrite
+python AVSync_batch.py ./ref ./foreign ./output --overwrite
 
-# With pass-through arguments for AVSync_v18.py:
+# With pass-through arguments for AVSync.py:
 # (All arguments after the three folders are passed directly to the main script)
-python AVSync_batch_regex.py ./ref ./foreign ./output --ref_lang eng --foreign_lang hin --foreign_tracks all
+python AVSync_batch.py ./ref ./foreign ./output --ref_lang eng --foreign_lang hin --foreign_tracks all
 
 # Sync all foreign audio tracks with QC images:
-python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all --qc_output_dir ./qc_images
+python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --foreign_tracks all --qc_output_dir ./qc_images
 
 # Add uniform-sample anchors every 90s and clear track titles in the output:
-python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --uniform_sample_interval 90 --clean_track_names
+python AVSync_batch.py ./ref ./foreign ./output --foreign_lang jpn --uniform_sample_interval 90 --clean_track_names
 
 # Note: --auto_detect is always injected in batch mode to skip interactive prompts.
-# A valid --foreign_lang is REQUIRED in batch mode (v18 enforces language metadata).
+# A valid --foreign_lang is REQUIRED in batch mode (the engine enforces language metadata).
 # If the foreign files have proper language tags in metadata, they will be used automatically.
 
 # It is recommended to use quotes around paths, especially if they contain spaces.
@@ -108,7 +108,7 @@ python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --unifo
     args, unknown_args = parser.parse_known_args()
 
     # --- 1. Initial Validation ---
-    print(f"--- AVSync v18 Batch Processor (SxxExx matching) -> {AVSYNC_SCRIPT_NAME} ---")
+    print(f"--- AVSync Batch Processor (SxxExx matching) -> {AVSYNC_SCRIPT_NAME} ---")
 
     # Resolve the main script relative to this batch script (not just CWD)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -225,7 +225,7 @@ python AVSync_batch_regex.py ./ref ./foreign ./output --foreign_lang jpn --unifo
             skipped_existing_count += 1
             continue
         
-        # Construct the command to run AVSync_v18.py
+        # Construct the command to run the engine
         # Using sys.executable ensures the same python interpreter is used
         # --auto_detect is injected to ensure non-interactive batch operation
         command = [
